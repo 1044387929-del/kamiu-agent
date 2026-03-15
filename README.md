@@ -1,6 +1,60 @@
 # kamiu_agent
 
-## 测试一下
+教师智能助手：LangGraph + FastAPI，与 Django 解耦，支持对话、查数、学科知识（规划中）。
+
+## 项目结构
+
+```
+kamiu_agent/
+├── app/
+│   ├── main.py       # FastAPI 入口
+│   └── config.py     # 配置（从 config/*.env 加载）
+├── graph/            # LangGraph 图
+│   ├── state.py      # 图状态
+│   ├── nodes.py      # 节点逻辑
+│   └── graph.py      # 图构建
+├── tools/            # 工具（如调 Django 执行代码、向量检索）
+├── api/
+│   └── routes.py    # 接口：/api/chat 等
+├── config/          # 环境配置（llm.env, database.env）
+├── requirements.txt
+└── run.sh            # 启动脚本
+```
+
+## 配置变量（需修改后才生效）
+
+`config/*.env` 已被 git 忽略，需自行从示例复制并填写：
+
+```bash
+cd config
+cp llm.env.example llm.env
+cp database.env.example database.env
+# 编辑 llm.env、database.env，填入实际值
+```
+
+| 文件 | 变量 | 说明 |
+|------|------|------|
+| **llm.env** | `DASHSCOPE_API_KEY` | 千问 API Key，必填 |
+| **llm.env** | `LLM_MODEL` | 模型名，默认 `qwen-plus` |
+| **database.env** | `DB_NAME` / `DB_USER` / `DB_PASSWORD` 等 | 数据库连接（若需连库） |
+| **database.env** | `REDIS_URL` | Redis 地址（若需要） |
+
+## 运行
+
+```bash
+# 安装依赖
+pip install -r requirements.txt
+
+# 确认 config/llm.env 等已配置后再启动（默认 8002 端口）
+bash run.sh
+# 或
+PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
+```
+
+- 健康检查：`GET http://localhost:8002/health`
+- 对话：`POST http://localhost:8002/api/chat`，body: `{"message": "你好", "teacher_id": "xxx"}`
+
+---
 
 #### 介绍
 {**以下是 Gitee 平台说明，您可以替换此简介**
