@@ -3,6 +3,7 @@ LangGraph 节点：每个节点接收 state，返回 state 的增量更新。
 """
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from core.llm import get_llm
 from graph.state import AgentState
 
 
@@ -14,20 +15,22 @@ def route_node(state: AgentState) -> AgentState:
     return {}
 
 
+SYSTEM_PROMPT = "你是教师智能助手，回答简洁、专业、友好。"
+
+
 def reply_node(state: AgentState) -> AgentState:
     """
-    回复节点：根据当前 state 生成助手回复（占位：简单 echo）。
-    后续可在此调用 LLM，并注入 retrieved_docs、tool_results 等。
+    回复节点：调用 LLM 根据当前 messages 生成助手回复。
     """
     messages = state.get("messages") or []
     if not messages:
-        return {"messages": [AIMessage(content="你好，我是教师助手。当前为占位回复。")]}
-    last = messages[-1]
-    if isinstance(last, HumanMessage):
-        reply = f"收到你的消息（占位）：{last.content[:100]}…"
-    else:
-        reply = "请发送一条消息。"
-    return {"messages": [AIMessage(content=reply)]}
+        return {"messages": [AIMessage(content="你好，我是教师助手。有什么可以帮你的？")]}
+    llm = get_llm()
+    # 首条为系统提示，便于模型保持角色
+    full_messages = [SystemMessage(content=SYSTEM_PROMPT)] + list(messages)
+    response = llm.invoke(full_messages)
+    content = getattr(response, "content", "") or ""
+    return {"messages": [AIMessage(content=content)]}
 
 
 def inject_system_node(state: AgentState) -> AgentState:

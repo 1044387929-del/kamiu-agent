@@ -1,5 +1,5 @@
 """
-应用配置：dotenv 加载 config/*.env，pydantic-settings 解析为配置对象。
+应用配置：dotenv 加载 config/*.env，pydantic-settings 解析。
 """
 from pathlib import Path
 
@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     dashscope_api_key: str = ""
     llm_model: str = "qwen-plus"
+    enable_thinking_default: bool = False
 
 
 settings = Settings()

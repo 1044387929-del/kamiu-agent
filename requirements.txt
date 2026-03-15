@@ -10,7 +10,4 @@ pydantic-settings>=2.0.0
 langgraph>=0.0.26
 langchain-core>=0.1.0
 langchain-community>=0.0.20
-
-# 千问 / 通用 LLM（按需安装）
-# dashscope
-# langchain-dashscope
+openai>=1.0.0

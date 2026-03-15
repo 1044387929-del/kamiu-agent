@@ -1,10 +1,15 @@
 """
 FastAPI 应用入口：教师智能助手服务。
+
+- 对话：/api/chat、/api/chat/stream（routers/assistant）
+- 健康检查：/health（routers/health）
+
+启动: uvicorn app:app --host 0.0.0.0 --port 8002 --reload
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import routes
+from routers import assistant, health
 
 app = FastAPI(
     title="Kamiu Agent",
@@ -20,9 +25,5 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(routes.router, prefix="/api", tags=["assistant"])
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+app.include_router(health.router)
+app.include_router(assistant.router, prefix="/api")

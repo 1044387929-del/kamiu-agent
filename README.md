@@ -34,7 +34,9 @@ PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
 ```
 
 - 健康检查：`GET http://localhost:8002/health`
-- 对话：`POST http://localhost:8002/api/chat`，body: `{"message": "你好", "teacher_id": "xxx"}`
+- 对话（非流式）：`POST http://localhost:8002/api/chat`，body: `{"message": "你好", "history": [], "enable_thinking": false}`，返回 `{"reply": "..."}` 或带 `"reasoning"`（思考模式时）
+- 对话（流式 SSE）：`POST http://localhost:8002/api/chat/stream`，同上 body，事件类型：`reasoning` | `content` | `usage` | `done`
+- 思考模式：body 中 `"enable_thinking": true`（需模型支持，如 deepseek-v3.2），参考 `examples/chat_qwen_think.py`
 
 ---
 
