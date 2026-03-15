@@ -21,31 +21,13 @@ kamiu_agent/
 └── run.sh            # 启动脚本
 ```
 
-## 配置变量（需修改后才生效）
-
-`config/*.env` 已被 git 忽略，需自行从示例复制并填写：
-
-```bash
-cd config
-cp llm.env.example llm.env
-cp database.env.example database.env
-# 编辑 llm.env、database.env，填入实际值
-```
-
-| 文件 | 变量 | 说明 |
-|------|------|------|
-| **llm.env** | `DASHSCOPE_API_KEY` | 千问 API Key，必填 |
-| **llm.env** | `LLM_MODEL` | 模型名，默认 `qwen-plus` |
-| **database.env** | `DB_NAME` / `DB_USER` / `DB_PASSWORD` 等 | 数据库连接（若需连库） |
-| **database.env** | `REDIS_URL` | Redis 地址（若需要） |
-
 ## 运行
 
 ```bash
 # 安装依赖
 pip install -r requirements.txt
 
-# 确认 config/llm.env 等已配置后再启动（默认 8002 端口）
+# 启动（默认 8002 端口）
 bash run.sh
 # 或
 PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
