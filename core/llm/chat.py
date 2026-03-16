@@ -9,14 +9,13 @@ from openai import OpenAI
 
 from core.config import settings
 from core.schemas.chat import ChatRequest, ChatResponse
-
-SYSTEM_PROMPT = "你是教师智能助手，回答简洁、专业、友好。"
+from prompts import ASSISTANT_SYSTEM
 
 
 def build_messages(
     history: list[dict[str, Any]],
     message: str,
-    system_prompt: str | None = SYSTEM_PROMPT,
+    system_prompt: str | None = ASSISTANT_SYSTEM,
 ) -> list[dict[str, str]]:
     """将 history + 当前 message 转为 OpenAI 格式的 messages。"""
     messages: list[dict[str, str]] = []

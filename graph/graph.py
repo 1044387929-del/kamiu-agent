@@ -5,25 +5,33 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from graph.state import AgentState
-from graph.nodes import reply_node, route_node
+from graph.nodes import route_node, _agent_node_impl
+from tools import tools_list
 
-# 若有工具，可在此注册；暂无则用占位流程
-# from tools.xxx import tools_list
-# tool_node = ToolNode(tools_list)
+
+def _has_tool_calls(state: AgentState) -> str:
+    """若最后一条消息有 tool_calls 则走 tools，否则结束。"""
+    messages = state.get("messages") or []
+    if not messages:
+        return "end"
+    last = messages[-1]
+    if hasattr(last, "tool_calls") and last.tool_calls:
+        return "tools"
+    return "end"
 
 
 def get_graph():
-    """构建并编译图，返回 CompiledGraph。"""
+    """构建并编译图，返回 CompiledGraph。agent 可调用工具，工具结果后回到 agent。"""
     builder = StateGraph(AgentState)
+    tool_node = ToolNode(tools_list)
 
-    # 节点
     builder.add_node("route", route_node)
-    builder.add_node("reply", reply_node)
-    # 若有工具： builder.add_node("tools", tool_node)
+    builder.add_node("agent", _agent_node_impl(tools_list))
+    builder.add_node("tools", tool_node)
 
-    # 边：START -> route -> reply -> END
     builder.add_edge(START, "route")
-    builder.add_edge("route", "reply")
-    builder.add_edge("reply", END)
+    builder.add_edge("route", "agent")
+    builder.add_conditional_edges("agent", _has_tool_calls, {"tools": "tools", "end": END})
+    builder.add_edge("tools", "agent")
 
     return builder.compile()

@@ -2,6 +2,24 @@
 
 教师智能助手：LangGraph + FastAPI，与 Django 解耦，支持对话、查数、学科知识（规划中）。
 
+## 图与边（LangGraph）
+
+当前对话 Agent 的图由 `graph/graph.py` 定义，节点与边如下（条件边：根据最后一条消息是否含 `tool_calls` 决定走向）。
+
+```mermaid
+flowchart TB
+    START([START]) --> route
+    route --> agent
+    agent --> has_tool_calls{最后一条消息\n有 tool_calls?}
+    has_tool_calls -->|是| tools
+    has_tool_calls -->|否| END([END])
+    tools --> agent
+```
+
+- **route**：路由节点（占位，直接进入 agent）。
+- **agent**：调用 LLM（`bind_tools`），可返回 `tool_calls` 或最终回复；若开启思考模式且本次无 tool_calls，会补采 reasoning。
+- **tools**：执行 `ToolNode(tools_list)`（当前含 `get_current_time`），结果写回 state，回到 agent。
+
 ## 项目结构
 
 ```

@@ -1,11 +1,12 @@
-"""助手对话接口：非流式 / 流式 SSE"""
+"""助手对话接口：非流式（走 Agent 图+工具）/ 流式 SSE"""
 from openai import OpenAI
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from core.deps import get_client
 from core.schemas.chat import ChatRequest, ChatResponse
-from core.llm import chat_completion, chat_completion_stream
+from core.llm import chat_completion_stream
+from core.agent import chat_with_agent
 
 router = APIRouter(tags=["chat"])
 
@@ -25,13 +26,11 @@ def chat_get() -> dict:
     }
 
 
+# 单轮对话（非流式）：走 LangGraph Agent，可调用工具（如当前时间）
 @router.post("/chat", response_model=ChatResponse)
-def chat(
-    body: ChatRequest,
-    client: OpenAI = Depends(get_client),
-) -> ChatResponse:
-    """单轮对话（非流式）。"""
-    return chat_completion(client, body)
+def chat(body: ChatRequest) -> ChatResponse:
+    """单轮对话（非流式），经 Agent 图，支持工具（如 get_current_time）。"""
+    return chat_with_agent(body)
 
 
 @router.post("/chat/stream")

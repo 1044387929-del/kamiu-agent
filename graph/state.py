@@ -21,3 +21,7 @@ class AgentState(TypedDict, total=False):
     retrieved_docs: list[str]
     # 工具执行结果（如查数、画图）
     tool_results: dict
+    # 是否开启思考模式（由调用方注入）
+    enable_thinking: bool
+    # 最近一次助手回复的思考过程（仅 enable_thinking 时由 agent 节点写入）
+    last_reasoning: str | None

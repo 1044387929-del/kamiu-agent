@@ -19,8 +19,8 @@ def get_openai_client() -> OpenAI:
 
 
 def get_llm():
-    """LangGraph 用：LangChain ChatOpenAI。"""
-    from langchain_community.chat_models import ChatOpenAI
+    """LangGraph 用：ChatOpenAI（需支持 bind_tools，故用 langchain_openai）。"""
+    from langchain_openai import ChatOpenAI
     return ChatOpenAI(
         model=settings.llm_model,
         openai_api_key=settings.dashscope_api_key,
