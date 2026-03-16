@@ -6,8 +6,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Base
 from core.llm import get_llm, get_openai_client
 from core.config import settings
 from graph.state import AgentState
-from prompts import ASSISTANT_SYSTEM_WITH_TOOLS
-
+from prompts import ASSISTANT_SYSTEM_WITH_TOOLS_TEMPLATE
 
 def _messages_to_openai(messages: list[BaseMessage]) -> list[dict]:
     """LangChain messages 转 OpenAI API 格式。"""
@@ -31,22 +30,74 @@ def route_node(state: AgentState) -> AgentState:
 
 
 def _agent_node_impl(tools_list: list):
-    """返回带工具调用的 agent 节点（LLM 可返回 tool_calls）；支持思考模式时补采 reasoning。"""
+    """返回带工具调用的 agent 节点（LLM 可返回 tool_calls）；支持思考模式时补采 reasoning；支持 stream_queue 时边生成边推送。"""
 
     def agent_node(state: AgentState) -> dict:
+        """
+        回复节点：调用 LLM 根据当前 messages 生成助手回复。
+        """
         messages = state.get("messages") or []
         if not messages:
             return {"messages": [AIMessage(content="你好，我是教师助手。有什么可以帮你的？")]}
         enable_thinking = state.get("enable_thinking", False)
+        stream_queue = state.get("stream_queue")
         llm = get_llm()
         if tools_list:
             llm = llm.bind_tools(tools_list)
-        full = [SystemMessage(content=ASSISTANT_SYSTEM_WITH_TOOLS)] + list(messages)
-        response = llm.invoke(full)
-        out = {"messages": [response]}
+        system_text = ASSISTANT_SYSTEM_WITH_TOOLS_TEMPLATE.format()
+        full = [SystemMessage(content=system_text)] + list(messages)
+
+        if stream_queue is not None:
+            # 边生成边推送到 queue；若开启思考则用 raw 流式接口，先推 reasoning 再推 content
+            if enable_thinking:
+                client = get_openai_client()
+                openai_messages = _messages_to_openai(full)
+                content_parts = []
+                reasoning_parts = []
+                try:
+                    completion = client.chat.completions.create(
+                        model=settings.llm_model,
+                        messages=openai_messages,
+                        stream=True,
+                        extra_body={"enable_thinking": True},
+                        stream_options={"include_usage": True},
+                    )
+                    for chunk in completion:
+                        if not chunk.choices:
+                            continue
+                        delta = chunk.choices[0].delta
+                        if getattr(delta, "reasoning_content", None):
+                            reasoning_parts.append(delta.reasoning_content)
+                            stream_queue.put(("reasoning", delta.reasoning_content))
+                        if getattr(delta, "content", None):
+                            content_parts.append(delta.content)
+                            stream_queue.put(("content", delta.content))
+                    content = "".join(content_parts).strip()
+                    reasoning = "".join(reasoning_parts).strip() or None
+                    out = {"messages": [AIMessage(content=content)]}
+                    if reasoning:
+                        out["last_reasoning"] = reasoning
+                except Exception:
+                    # 降级：不用思考流式，走下面非思考的 stream
+                    full_response = None
+                    for chunk in llm.stream(full):
+                        if getattr(chunk, "content", None):
+                            stream_queue.put(("content", chunk.content))
+                        full_response = chunk if full_response is None else full_response + chunk
+                    out = {"messages": [full_response]}
+            else:
+                full_response = None
+                for chunk in llm.stream(full):
+                    if getattr(chunk, "content", None):
+                        stream_queue.put(("content", chunk.content))
+                    full_response = chunk if full_response is None else full_response + chunk
+                out = {"messages": [full_response]}
+        else:
+            response = llm.invoke(full)
+            out = {"messages": [response]}
 
         # 当用户开启思考模式且本次为最终回复（无 tool_calls）时，用流式请求补采 reasoning
-        if enable_thinking and not getattr(response, "tool_calls", None):
+        if enable_thinking and not getattr(out["messages"][0], "tool_calls", None):
             client = get_openai_client()
             openai_messages = _messages_to_openai(full)
             model = settings.llm_model
@@ -84,7 +135,8 @@ def reply_node(state: AgentState) -> AgentState:
         return {"messages": [AIMessage(content="你好，我是教师助手。有什么可以帮你的？")]}
     llm = get_llm()
     # 首条为系统提示，便于模型保持角色
-    full_messages = [SystemMessage(content=ASSISTANT_SYSTEM_WITH_TOOLS)] + list(messages)
+    system_text = ASSISTANT_SYSTEM_WITH_TOOLS_TEMPLATE.format()
+    full_messages = [SystemMessage(content=system_text)] + list(messages)
     response = llm.invoke(full_messages)
     content = getattr(response, "content", "") or ""
     return {"messages": [AIMessage(content=content)]}

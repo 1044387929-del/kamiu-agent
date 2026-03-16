@@ -1,12 +1,9 @@
-"""助手对话接口：非流式（走 Agent 图+工具）/ 流式 SSE"""
-from openai import OpenAI
-from fastapi import APIRouter, Depends
+"""助手对话接口：统一走 Agent 图+工具；流式仅为返回形式（POST /api/chat/stream）。"""
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from core.deps import get_client
 from core.schemas.chat import ChatRequest, ChatResponse
-from core.llm import chat_completion_stream
-from core.agent import chat_with_agent
+from core.agent import chat_with_agent, chat_with_agent_stream
 
 router = APIRouter(tags=["chat"])
 
@@ -15,7 +12,7 @@ router = APIRouter(tags=["chat"])
 def chat_get() -> dict:
     """说明。"""
     return {
-        "usage": "POST /api/chat 或 POST /api/chat/stream",
+        "usage": "POST /api/chat（JSON）或 POST /api/chat/stream（SSE），均走 Agent 图+工具",
         "body": {
             "message": "必填",
             "history": "[]",
@@ -26,21 +23,18 @@ def chat_get() -> dict:
     }
 
 
-# 单轮对话（非流式）：走 LangGraph Agent，可调用工具（如当前时间）
+# 统一走 Agent 图；stream 仅控制返回形式
 @router.post("/chat", response_model=ChatResponse)
 def chat(body: ChatRequest) -> ChatResponse:
-    """单轮对话（非流式），经 Agent 图，支持工具（如 get_current_time）。"""
+    """非流式：经 Agent 图（含工具），返回 JSON。"""
     return chat_with_agent(body)
 
 
 @router.post("/chat/stream")
-def chat_stream(
-    body: ChatRequest,
-    client: OpenAI = Depends(get_client),
-) -> StreamingResponse:
-    """流式对话（SSE），事件类型：reasoning | content | usage | done。"""
+def chat_stream(body: ChatRequest) -> StreamingResponse:
+    """流式（SSE）：经同一 Agent 图（含工具），结果按 content/reasoning/done 流式返回。"""
     return StreamingResponse(
-        chat_completion_stream(client, body),
+        chat_with_agent_stream(body),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

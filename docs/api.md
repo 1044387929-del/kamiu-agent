@@ -2,6 +2,8 @@
 
 服务默认地址：`http://127.0.0.1:8002`（以 `run.sh` 或 uvicorn 启动为准）。
 
+**多轮对话测试前端**：浏览器访问 `http://127.0.0.1:8002/` 即可使用简单聊天界面，自动带历史进行多轮对话。
+
 ---
 
 ## 健康检查
@@ -45,7 +47,7 @@
 
 ### POST /api/chat
 
-单轮对话（非流式），一次请求返回完整回复。
+非流式：走 Agent 图（含工具如 get_current_time），一次请求返回完整回复。
 
 **请求体（JSON）**
 
@@ -76,7 +78,7 @@ curl -X POST http://127.0.0.1:8002/api/chat \
 
 ### POST /api/chat/stream
 
-流式对话，使用 **Server-Sent Events (SSE)** 按块返回内容。
+流式：走**同一 Agent 图**（含工具），仅以 **Server-Sent Events (SSE)** 按块返回内容。
 
 **请求体**  
 与 `POST /api/chat` 相同（见上表）。

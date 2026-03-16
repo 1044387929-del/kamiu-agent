@@ -25,3 +25,5 @@ class AgentState(TypedDict, total=False):
     enable_thinking: bool
     # 最近一次助手回复的思考过程（仅 enable_thinking 时由 agent 节点写入）
     last_reasoning: str | None
+    # 流式输出时由调用方注入的 queue，agent 节点将 content delta 放入此队列
+    stream_queue: object  # queue.Queue

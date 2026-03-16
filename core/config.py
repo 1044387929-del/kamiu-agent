@@ -8,7 +8,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# 加载环境变量，配置大模型相关参数
 load_dotenv(BASE_DIR / "config" / "llm.env")
+# 加载数据库相关环境变量
 load_dotenv(BASE_DIR / "config" / "database.env")
 
 
