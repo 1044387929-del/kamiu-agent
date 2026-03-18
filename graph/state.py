@@ -25,6 +25,10 @@ class AgentState(TypedDict, total=False):
     enable_thinking: bool
     # 是否开启联网搜索（由调用方注入；开启时 agent 可调用 web_search，但仍优先用其他工具）
     enable_web_search: bool
+    # 是否开启数据库只读查询（由调用方注入；开启时可调用 get_db_schema、execute_readonly_orm_code、execute_readonly_sql）
+    enable_db_query: bool
+    # 是否强制执行数据库查询（由 route 判定：当问题属于“平台内部可验证数据”时为 True，避免模型仅口头回答）
+    force_db_query: bool
     # 本次请求使用的模型 ID（由调用方注入；None 时用配置默认）
     model: str | None
     # 最近一次助手回复的思考过程（仅 enable_thinking 时由 agent 节点写入）

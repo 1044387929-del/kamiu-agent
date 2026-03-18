@@ -1,3 +1,6 @@
+"""
+测试思考模式功能
+"""
 from openai import OpenAI
 import os
 from dotenv import load_dotenv

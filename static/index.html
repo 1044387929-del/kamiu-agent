@@ -153,6 +153,9 @@
     }
     .loading { opacity: 0.7; }
   </style>
+  <!-- Markdown 渲染：marked + DOMPurify（防 XSS） -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 </head>
 <body>
   <h1>Kamiu 助手 · 多轮对话测试（流式）</h1>
@@ -197,6 +200,11 @@
       return p.innerHTML;
     }
 
+    function renderMarkdown(md) {
+      const html = window.marked ? marked.parse(md || '') : escapeHtml(md || '');
+      return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+    }
+
     function appendMessage(role, content, reasoning) {
       const div = document.createElement('div');
       div.className = 'msg ' + role;
@@ -204,9 +212,9 @@
       let html = '<span class="role">' + roleLabel + '</span>';
       if (role === 'assistant') {
         if (reasoning) {
-          html += '<div class="reasoning-wrap"><span class="reasoning-label">思考过程</span><div class="reasoning-content">' + escapeHtml(reasoning) + '</div></div>';
+          html += '<div class="reasoning-wrap"><span class="reasoning-label">思考过程</span><div class="reasoning-content">' + renderMarkdown(reasoning) + '</div></div>';
         }
-        html += '<div class="reply-wrap"><span class="reply-label">回复</span><span class="content">' + escapeHtml(content) + '</span></div>';
+        html += '<div class="reply-wrap"><span class="reply-label">回复</span><span class="content">' + renderMarkdown(content) + '</span></div>';
       } else {
         html += escapeHtml(content);
       }
@@ -218,7 +226,14 @@
     function createStreamingAssistantMessage() {
       const div = document.createElement('div');
       div.className = 'msg assistant';
-      div.innerHTML = '<span class="role">助手</span><div class="reasoning-wrap" style="display:none;"><span class="reasoning-label">思考过程</span><div class="reasoning-content"></div></div><div class="reply-wrap"><span class="reply-label">回复</span><span class="content"></span></div>';
+      div.innerHTML =
+        '<span class="role">助手</span>' +
+        '<div class="reasoning-wrap" style="display:none;"><span class="reasoning-label">思考过程</span><div class="reasoning-content"></div></div>' +
+        '<div class="exec-wrap" style="display:none;">' +
+          '<span class="reply-label">执行的查询语句</span><div class="exec-content"></div>' +
+          '<span class="reply-label" style="margin-top:8px; display:block;">运行结果</span><div class="exec-result"></div>' +
+        '</div>' +
+        '<div class="reply-wrap"><span class="reply-label">回复</span><span class="content"></span></div>';
       messagesEl.appendChild(div);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return {
@@ -226,6 +241,10 @@
         contentEl: div.querySelector('.content'),
         reasoningWrap: div.querySelector('.reasoning-wrap'),
         reasoningContent: div.querySelector('.reasoning-content'),
+        execWrap: div.querySelector('.exec-wrap'),
+        execContent: div.querySelector('.exec-content'),
+        execResult: div.querySelector('.exec-result'),
+        execMap: new Map(),
       };
     }
 
@@ -298,11 +317,38 @@
               if (t === 'reasoning' && obj.content != null) {
                 fullReasoning += obj.content;
                 streaming.reasoningWrap.style.display = 'block';
-                streaming.reasoningContent.textContent = fullReasoning;
+                streaming.reasoningContent.innerHTML = renderMarkdown(fullReasoning);
                 messagesEl.scrollTop = messagesEl.scrollHeight;
               } else if (t === 'content' && obj.content != null) {
                 fullContent += obj.content;
-                streaming.contentEl.textContent = fullContent;
+                streaming.contentEl.innerHTML = renderMarkdown(fullContent);
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+              } else if (t === 'exec' && obj.id) {
+                // 先展示将要执行的代码（后续 exec_result 会覆盖）
+                const lang = obj.lang || '';
+                const code = obj.code || '';
+                streaming.execWrap.style.display = 'block';
+                const md = '```' + lang + '\n' + code + '\n```';
+                const container = document.createElement('div');
+                container.dataset.execId = obj.id;
+                container.innerHTML = renderMarkdown(md);
+                // 保留查询语句，不要被结果覆盖（便于核对）
+                streaming.execContent.innerHTML = '';
+                streaming.execContent.appendChild(container);
+                streaming.execMap.set(obj.id, container);
+                streaming.execResult.innerHTML = '';
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+              } else if (t === 'exec_result' && obj.id) {
+                // 展示运行结果（不覆盖查询语句）
+                const result = obj.result == null ? '' : String(obj.result);
+                let md = result;
+                // 若结果看起来是 JSON，包一层代码块便于阅读
+                const trimmed = result.trim();
+                if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+                  md = '```json\n' + trimmed + '\n```';
+                }
+                streaming.execWrap.style.display = 'block';
+                streaming.execResult.innerHTML = renderMarkdown(md);
                 messagesEl.scrollTop = messagesEl.scrollHeight;
               } else if (t === 'done') {
                 seenDone = true;
@@ -315,7 +361,7 @@
 
         if (fullReasoning) {
           streaming.reasoningWrap.style.display = 'block';
-          streaming.reasoningContent.textContent = fullReasoning;
+          streaming.reasoningContent.innerHTML = renderMarkdown(fullReasoning);
         }
         messagesEl.scrollTop = messagesEl.scrollHeight;
 

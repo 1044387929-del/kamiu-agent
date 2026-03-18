@@ -114,4 +114,8 @@ def chat_with_agent_stream(req: ChatRequest) -> Generator[str, None, None]:
             yield _sse_event({"type": "reasoning", "content": item[1]})
         elif item[0] == "content":
             yield _sse_event({"type": "content", "content": item[1]})
+        elif item[0] == "exec":
+            yield _sse_event({"type": "exec", **(item[1] or {})})
+        elif item[0] == "exec_result":
+            yield _sse_event({"type": "exec_result", **(item[1] or {})})
     yield _sse_event({"type": "done"})

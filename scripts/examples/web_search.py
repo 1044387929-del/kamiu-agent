@@ -1,3 +1,6 @@
+"""
+测试联网搜索功能
+"""
 import os
 from openai import OpenAI
 from dotenv import load_dotenv
