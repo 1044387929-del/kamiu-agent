@@ -1,6 +1,62 @@
 # kamiu_agent
 
-## 测试一下
+教师智能助手：LangGraph + FastAPI，与 Django 解耦，支持对话、查数、学科知识（规划中）。
+
+## 图与边（LangGraph）
+
+当前对话 Agent 的图由 `graph/graph.py` 定义，节点与边如下（条件边：根据最后一条消息是否含 `tool_calls` 决定走向）。
+
+```mermaid
+flowchart TB
+    START([START]) --> route
+    route --> agent
+    agent --> has_tool_calls{最后一条消息\n有 tool_calls?}
+    has_tool_calls -->|是| tools
+    has_tool_calls -->|否| END([END])
+    tools --> agent
+```
+
+- **route**：路由节点（占位，直接进入 agent）。
+- **agent**：调用 LLM（`bind_tools`），可返回 `tool_calls` 或最终回复；若开启思考模式且本次无 tool_calls，会补采 reasoning。
+- **tools**：执行 `ToolNode(tools_list)`（当前含 `get_current_time`），结果写回 state，回到 agent。
+
+## 项目结构
+
+```
+kamiu_agent/
+├── app/
+│   ├── main.py       # FastAPI 入口
+│   └── config.py     # 配置（从 config/*.env 加载）
+├── graph/            # LangGraph 图
+│   ├── state.py      # 图状态
+│   ├── nodes.py      # 节点逻辑
+│   └── graph.py      # 图构建
+├── tools/            # 工具（如调 Django 执行代码、向量检索）
+├── api/
+│   └── routes.py    # 接口：/api/chat 等
+├── config/          # 环境配置（llm.env, database.env）
+├── requirements.txt
+└── run.sh            # 启动脚本
+```
+
+## 运行
+
+```bash
+# 安装依赖
+pip install -r requirements.txt
+
+# 启动（默认 8002 端口）
+bash run.sh
+# 或
+PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
+```
+
+- 健康检查：`GET http://localhost:8002/health`
+- 对话（非流式）：`POST http://localhost:8002/api/chat`，body: `{"message": "你好", "history": [], "enable_thinking": false}`，返回 `{"reply": "..."}` 或带 `"reasoning"`（思考模式时）
+- 对话（流式 SSE）：`POST http://localhost:8002/api/chat/stream`，同上 body，事件类型：`reasoning` | `content` | `usage` | `done`
+- 思考模式：body 中 `"enable_thinking": true`（需模型支持，如 deepseek-v3.2），参考 `examples/chat_qwen_think.py`
+
+---
 
 #### 介绍
 {**以下是 Gitee 平台说明，您可以替换此简介**
