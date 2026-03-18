@@ -21,14 +21,37 @@
 
 ## Architecture
 
-The conversation graph is defined in `graph/graph.py`. The flow branches on whether the last message has `tool_calls`.
+### Request to graph
+
+Requests carry `message`, optional `model`, `enable_web_search`, and `enable_thinking`. The server validates `model`, builds the graph with or without `web_search` based on `enable_web_search`, injects state, and runs the graph.
 
 ```mermaid
 flowchart LR
-    START([START]) --> route
-    route --> agent
-    agent --> has_tool_calls{tool_calls?}
-    has_tool_calls -->|yes| tools
+    subgraph Request
+        A[message, model, enable_web_search, enable_thinking]
+    end
+    subgraph Server
+        B[Validate model / default]
+        C["get_graph(enable_web_search)"]
+        D["Tools: get_current_time (+ web_search?)"]
+        E[Inject state, run graph]
+    end
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+```
+
+### Graph execution
+
+The conversation graph is defined in `graph/graph.py`: route → agent; if the LLM returns `tool_calls`, run tools and loop back to agent (possibly multiple times), otherwise end.
+
+```mermaid
+flowchart LR
+    START([START]) --> route[route]
+    route --> agent[agent]
+    agent --> has_tool_calls{Last message\nhas tool_calls?}
+    has_tool_calls -->|yes| tools[tools]
     has_tool_calls -->|no| END([END])
     tools --> agent
 ```
@@ -36,8 +59,8 @@ flowchart LR
 | Node | Description |
 |------|-------------|
 | **route** | Router (placeholder; passes through to agent). |
-| **agent** | Calls LLM with `bind_tools`; may return tool_calls or final reply; in thinking mode, may sample reasoning when there are no tool_calls. |
-| **tools** | Runs `ToolNode(tools_list)` (e.g. `get_current_time`); results are written to state and control returns to agent. |
+| **agent** | Calls LLM with the request’s **model** (`bind_tools`); may return tool_calls or final reply; system prompt says to **prefer non-web tools**, use `web_search` only when needed; in thinking mode, may sample reasoning when there are no tool_calls. |
+| **tools** | Runs `ToolNode(tools_list)`: always `get_current_time`; if the request enables web search, also `web_search`; results are written to state and control returns to agent. |
 
 ---
 

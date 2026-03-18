@@ -40,11 +40,19 @@ def _agent_node_impl(tools_list: list):
         if not messages:
             return {"messages": [AIMessage(content="你好，我是教师助手。有什么可以帮你的？")]}
         enable_thinking = state.get("enable_thinking", False)
+        enable_web_search = state.get("enable_web_search", False)
+        model_override = (state.get("model") or "").strip() or None
         stream_queue = state.get("stream_queue")
-        llm = get_llm()
+        llm = get_llm(model=model_override)
         if tools_list:
             llm = llm.bind_tools(tools_list)
-        system_text = ASSISTANT_SYSTEM_WITH_TOOLS_TEMPLATE.format()
+        web_search_instruction = (
+            "优先使用除 web_search 以外的工具（如 get_current_time）解决问题；"
+            "仅当这些工具无法回答时再使用 web_search 进行联网搜索。"
+            if enable_web_search
+            else ""
+        )
+        system_text = ASSISTANT_SYSTEM_WITH_TOOLS_TEMPLATE.format(web_search_instruction=web_search_instruction)
         full = [SystemMessage(content=system_text)] + list(messages)
 
         if stream_queue is not None:
@@ -56,7 +64,7 @@ def _agent_node_impl(tools_list: list):
                 reasoning_parts = []
                 try:
                     completion = client.chat.completions.create(
-                        model=settings.llm_model,
+                        model=model_override or settings.llm_model,
                         messages=openai_messages,
                         stream=True,
                         extra_body={"enable_thinking": True},
@@ -100,7 +108,7 @@ def _agent_node_impl(tools_list: list):
         if enable_thinking and not getattr(out["messages"][0], "tool_calls", None):
             client = get_openai_client()
             openai_messages = _messages_to_openai(full)
-            model = settings.llm_model
+            model = model_override or settings.llm_model
             try:
                 completion = client.chat.completions.create(
                     model=model,

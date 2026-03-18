@@ -10,6 +10,7 @@ from collections.abc import Generator
 from langchain_core.messages import AIMessage, HumanMessage
 
 from core.config import settings
+from core.dashscope_models import is_valid_model
 from core.schemas.chat import ChatRequest, ChatResponse
 from graph.graph import get_graph
 
@@ -38,8 +39,19 @@ def chat_with_agent(req: ChatRequest) -> ChatResponse:
     enable_thinking = (
         req.enable_thinking if req.enable_thinking is not None else settings.enable_thinking_default
     )
-    graph = get_graph()
-    result = graph.invoke({"messages": messages, "enable_thinking": enable_thinking})
+    enable_web_search = req.enable_web_search
+    model = (req.model or "").strip() or None
+    if model and not is_valid_model(model):
+        model = None
+    if not model:
+        model = settings.llm_model
+    graph = get_graph(enable_web_search=enable_web_search)
+    result = graph.invoke({
+        "messages": messages,
+        "enable_thinking": enable_thinking,
+        "enable_web_search": enable_web_search,
+        "model": model,
+    })
     final_messages = result.get("messages") or []
     reply = ""
     for m in reversed(final_messages):
@@ -64,9 +76,21 @@ def chat_with_agent_stream(req: ChatRequest) -> Generator[str, None, None]:
     enable_thinking = (
         req.enable_thinking if req.enable_thinking is not None else settings.enable_thinking_default
     )
+    enable_web_search = req.enable_web_search
+    model = (req.model or "").strip() or None
+    if model and not is_valid_model(model):
+        model = None
+    if not model:
+        model = settings.llm_model
     stream_queue = queue.Queue()
-    initial_state = {"messages": messages, "enable_thinking": enable_thinking, "stream_queue": stream_queue}
-    graph = get_graph()
+    initial_state = {
+        "messages": messages,
+        "enable_thinking": enable_thinking,
+        "enable_web_search": enable_web_search,
+        "model": model,
+        "stream_queue": stream_queue,
+    }
+    graph = get_graph(enable_web_search=enable_web_search)
     result_holder = []
 
     def run_graph():

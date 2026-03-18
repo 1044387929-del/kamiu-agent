@@ -21,14 +21,37 @@
 
 ## 🏗 架构概览
 
-对话图由 `graph/graph.py` 定义，根据最后一条消息是否包含 `tool_calls` 决定是否执行工具并循环。
+### 请求到图的流程
+
+前端/API 请求携带 `message`、`model`（可选）、`enable_web_search`、`enable_thinking`。服务端校验 `model`、按 `enable_web_search` 决定是否注入 `web_search` 工具，将上述参数注入 state 后执行图。
 
 ```mermaid
 flowchart LR
-    START([START]) --> route
-    route --> agent
-    agent --> has_tool_calls{有 tool_calls?}
-    has_tool_calls -->|是| tools
+    subgraph 请求
+        A[请求: message, model, enable_web_search, enable_thinking]
+    end
+    subgraph 服务端
+        B[校验 model / 默认]
+        C["get_graph(enable_web_search)"]
+        D["工具列表: get_current_time (+ web_search?)"]
+        E[注入 state 执行图]
+    end
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+```
+
+### 图内执行流程
+
+对话图由 `graph/graph.py` 定义：先走路由，再进 agent；若 LLM 返回 `tool_calls` 则执行工具并回到 agent（可多轮），否则结束。
+
+```mermaid
+flowchart LR
+    START([START]) --> route[route]
+    route --> agent[agent]
+    agent --> has_tool_calls{最后一条消息\n有 tool_calls?}
+    has_tool_calls -->|是| tools[tools]
     has_tool_calls -->|否| END([END])
     tools --> agent
 ```
@@ -36,8 +59,8 @@ flowchart LR
 | 节点 | 说明 |
 |------|------|
 | **route** | 路由节点（占位，直接进入 agent） |
-| **agent** | 调用 LLM（`bind_tools`），可返回 tool_calls 或最终回复；思考模式下无 tool_calls 时会补采 reasoning |
-| **tools** | 执行 `ToolNode(tools_list)`（如 `get_current_time`），结果写回 state 后回到 agent |
+| **agent** | 使用本次请求所选 **model** 调用 LLM（`bind_tools`），可返回 tool_calls 或最终回复；系统提示要求**优先用非联网工具**，解决不了再用 `web_search`；思考模式下无 tool_calls 时会补采 reasoning |
+| **tools** | 执行 `ToolNode(tools_list)`：必有 `get_current_time`；若请求开启联网搜索则还有 `web_search`，结果写回 state 后回到 agent |
 
 ---
 

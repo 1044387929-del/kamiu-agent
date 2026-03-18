@@ -23,6 +23,10 @@ class AgentState(TypedDict, total=False):
     tool_results: dict
     # 是否开启思考模式（由调用方注入）
     enable_thinking: bool
+    # 是否开启联网搜索（由调用方注入；开启时 agent 可调用 web_search，但仍优先用其他工具）
+    enable_web_search: bool
+    # 本次请求使用的模型 ID（由调用方注入；None 时用配置默认）
+    model: str | None
     # 最近一次助手回复的思考过程（仅 enable_thinking 时由 agent 节点写入）
     last_reasoning: str | None
     # 流式输出时由调用方注入的 queue，agent 节点将 content delta 放入此队列

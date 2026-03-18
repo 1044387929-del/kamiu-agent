@@ -136,6 +136,14 @@
       color: #555;
     }
     .opts label { cursor: pointer; }
+    .opts select {
+      padding: 4px 8px;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      background: #fff;
+      font-size: 0.9rem;
+      color: #333;
+    }
     .error {
       background: #ffebee;
       color: #c62828;
@@ -150,7 +158,9 @@
   <h1>Kamiu 助手 · 多轮对话测试（流式）</h1>
   <div id="messages"></div>
   <div class="opts">
+    <label>模型：<select id="modelSelect"><option value="">默认（配置）</option></select></label>
     <label><input type="checkbox" id="enableThinking" /> 思考模式（返回 reasoning）</label>
+    <label><input type="checkbox" id="enableWebSearch" /> 联网搜索（优先用其他工具，解决不了再联网）</label>
   </div>
   <form id="form">
     <textarea id="input" rows="3" placeholder="输入消息，多轮对话会带上历史..." autocomplete="off"></textarea>
@@ -163,8 +173,23 @@
     const input = document.getElementById('input');
     const sendBtn = document.getElementById('sendBtn');
     const enableThinkingEl = document.getElementById('enableThinking');
+    const enableWebSearchEl = document.getElementById('enableWebSearch');
+    const modelSelectEl = document.getElementById('modelSelect');
 
     let messages = [];
+
+    // 加载可用模型列表
+    fetch('/api/models')
+      .then(r => r.ok ? r.json() : { models: [] })
+      .then(data => {
+        (data.models || []).forEach(id => {
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = id;
+          modelSelectEl.appendChild(opt);
+        });
+      })
+      .catch(() => {});
 
     function escapeHtml(text) {
       const p = document.createElement('p');
@@ -239,7 +264,9 @@
           body: JSON.stringify({
             message: text,
             history,
+            model: (modelSelectEl.value || '').trim() || undefined,
             enable_thinking: enableThinkingEl.checked || undefined,
+            enable_web_search: enableWebSearchEl.checked,
           }),
         });
 

@@ -18,11 +18,11 @@ def get_openai_client() -> OpenAI:
     )
 
 
-def get_llm():
-    """LangGraph 用：ChatOpenAI（需支持 bind_tools，故用 langchain_openai）。"""
+def get_llm(model: str | None = None):
+    """LangGraph 用：ChatOpenAI（需支持 bind_tools）。model 为 None 时使用配置默认。"""
     from langchain_openai import ChatOpenAI
     return ChatOpenAI(
-        model=settings.llm_model,
+        model=model or settings.llm_model,
         openai_api_key=settings.dashscope_api_key,
         openai_api_base=DASHSCOPE_BASE,
         temperature=0.7,

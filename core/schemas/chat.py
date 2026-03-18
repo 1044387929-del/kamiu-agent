@@ -25,6 +25,8 @@ class ChatRequest(BaseModel):
     teacher_id: str = Field(default="", description="教师 ID，预留")
     # 是否开启思考模式，不传则用配置默认，默认 None
     enable_thinking: bool | None = Field(default=None, description="是否开启思考模式，不传则用配置默认")
+    # 是否开启联网搜索；开启后 agent 优先用非联网工具，解决不了再调用 web_search
+    enable_web_search: bool = Field(default=False, description="是否开启联网搜索")
     # 模型名，不传则用配置默认
     model: str | None = Field(default=None, description="模型名，不传则用配置默认")
 

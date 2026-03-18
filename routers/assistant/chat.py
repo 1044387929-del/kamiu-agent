@@ -4,8 +4,15 @@ from fastapi.responses import StreamingResponse
 
 from core.schemas.chat import ChatRequest, ChatResponse
 from core.agent import chat_with_agent, chat_with_agent_stream
+from core.dashscope_models import get_model_list
 
 router = APIRouter(tags=["chat"])
+
+
+@router.get("/models")
+def list_models() -> dict:
+    """返回千问/DashScope 可用模型列表，供前端下拉选择。"""
+    return {"models": get_model_list()}
 
 
 @router.get("/chat")
@@ -18,6 +25,7 @@ def chat_get() -> dict:
             "history": "[]",
             "teacher_id": "",
             "enable_thinking": "false",
+            "enable_web_search": "false，是否联网搜索",
             "model": "可选",
         },
     }

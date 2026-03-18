@@ -24,6 +24,22 @@
 
 ## 助手对话
 
+### GET /api/models
+
+获取当前可选的模型 ID 列表（千问/DashScope），供前端下拉选择。
+
+**响应示例**
+
+```json
+{
+  "models": ["qwen-turbo", "qwen-plus", "qwen-max", "deepseek-v3", ...]
+}
+```
+
+模型列表由 `core/dashscope_models.py` 维护，可按需增删。
+
+---
+
 ### GET /api/chat
 
 获取对话接口使用说明，不发起请求。
@@ -57,6 +73,7 @@
 | history | array | 否 | 历史消息，每项为 `{ "content": "..." }`，默认 `[]` |
 | teacher_id | string | 否 | 教师 ID，预留，默认 `""` |
 | enable_thinking | boolean | 否 | 是否开启思考模式（部分模型支持），不传则用配置默认值 |
+| enable_web_search | boolean | 否 | 是否开启联网搜索；开启后优先用非联网工具，解决不了再联网，默认 `false` |
 | model | string | 否 | 模型名（如 qwen-plus），不传则用配置默认 |
 
 **响应体（JSON）**
