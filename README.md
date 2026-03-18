@@ -1,98 +1,138 @@
-# kamiu_agent
+# Kamiu Agent
 
-教师智能助手：LangGraph + FastAPI，与 Django 解耦，支持对话、查数、学科知识（规划中）。
-
-## 图与边（LangGraph）
-
-当前对话 Agent 的图由 `graph/graph.py` 定义，节点与边如下（条件边：根据最后一条消息是否含 `tool_calls` 决定走向）。
-
-```mermaid
-flowchart TB
-    START([START]) --> route
-    route --> agent
-    agent --> has_tool_calls{最后一条消息\n有 tool_calls?}
-    has_tool_calls -->|是| tools
-    has_tool_calls -->|否| END([END])
-    tools --> agent
-```
-
-- **route**：路由节点（占位，直接进入 agent）。
-- **agent**：调用 LLM（`bind_tools`），可返回 `tool_calls` 或最终回复；若开启思考模式且本次无 tool_calls，会补采 reasoning。
-- **tools**：执行 `ToolNode(tools_list)`（当前含 `get_current_time`），结果写回 state，回到 agent。
-
-## 项目结构
-
-```
-kamiu_agent/
-├── app/
-│   ├── main.py       # FastAPI 入口
-│   └── config.py     # 配置（从 config/*.env 加载）
-├── graph/            # LangGraph 图
-│   ├── state.py      # 图状态
-│   ├── nodes.py      # 节点逻辑
-│   └── graph.py      # 图构建
-├── tools/            # 工具（如调 Django 执行代码、向量检索）
-├── api/
-│   └── routes.py    # 接口：/api/chat 等
-├── config/          # 环境配置（llm.env, database.env）
-├── requirements.txt
-└── run.sh            # 启动脚本
-```
-
-## 运行
-
-```bash
-# 安装依赖
-pip install -r requirements.txt
-
-# 启动（默认 8002 端口）
-bash run.sh
-# 或
-PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
-```
-
-- 健康检查：`GET http://localhost:8002/health`
-- **测试前端（多轮对话）**：浏览器打开 `http://localhost:8002/` 或 `http://localhost:8002/static/index.html`，即可聊天测试，历史会随请求带上。
-- 对话（非流式）：`POST http://localhost:8002/api/chat`，body: `{"message": "你好", "history": [], "enable_thinking": false}`，返回 `{"reply": "..."}` 或带 `"reasoning"`（思考模式时）
-- 对话（流式 SSE）：`POST http://localhost:8002/api/chat/stream`，同上 body，事件类型：`reasoning` | `content` | `usage` | `done`
-- 思考模式：body 中 `"enable_thinking": true`（需模型支持，如 deepseek-v3.2），参考 `examples/chat_qwen_think.py`
+> Teacher assistant: a conversation Agent built with **LangGraph** and **FastAPI**, decoupled from Django. Supports multi-turn chat, tool calls, and thinking mode (planned: data lookup, subject knowledge).
 
 ---
 
-#### 介绍
-{**以下是 Gitee 平台说明，您可以替换此简介**
-Gitee 是 OSCHINA 推出的基于 Git 的代码托管平台（同时支持 SVN）。专为开发者提供稳定、高效、安全的云端软件开发协作平台
-无论是个人、团队、或是企业，都能够用 Gitee 实现代码托管、项目管理、协作开发。企业项目请看 [https://gitee.com/enterprises](https://gitee.com/enterprises)}
+## Features
 
-#### 软件架构
-软件架构说明
+- **LangGraph orchestration**: route → Agent (LLM + bound tools) → conditional edge (execute tools and loop back when `tool_calls` present).
+- **Dual API modes**: non-streaming `POST /api/chat` and streaming SSE `POST /api/chat/stream`, same graph logic.
+- **Thinking mode**: optional `enable_thinking` for models that support reasoning chains (e.g. deepseek-v3.2).
+- **Ready to run**: built-in test UI (multi-turn chat), health check, CORS; config loaded from `config/*.env`.
 
+---
 
-#### 安装教程
+## Architecture
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+The conversation graph is defined in `graph/graph.py`. The flow branches on whether the last message has `tool_calls`.
 
-#### 使用说明
+```mermaid
+flowchart LR
+    START([START]) --> route
+    route --> agent
+    agent --> has_tool_calls{tool_calls?}
+    has_tool_calls -->|yes| tools
+    has_tool_calls -->|no| END([END])
+    tools --> agent
+```
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+| Node | Description |
+|------|-------------|
+| **route** | Router (placeholder; passes through to agent). |
+| **agent** | Calls LLM with `bind_tools`; may return tool_calls or final reply; in thinking mode, may sample reasoning when there are no tool_calls. |
+| **tools** | Runs `ToolNode(tools_list)` (e.g. `get_current_time`); results are written to state and control returns to agent. |
 
-#### 参与贡献
+---
 
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
+## Project structure
 
+```
+kamiu_agent/
+├── app.py                 # FastAPI app entry
+├── run.sh                 # Run script (default port 8002)
+├── requirements.txt
+├── config/                # Env config
+│   ├── llm.env           # LLM (DASHSCOPE_API_KEY, LLM_MODEL, etc.)
+│   └── database.env      # Database (reserved)
+├── core/                  # Core logic
+│   ├── config.py         # Settings (pydantic-settings)
+│   ├── agent.py          # Agent invocation
+│   ├── deps.py           # Dependency injection
+│   ├── llm/              # LLM client and Chat
+│   └── schemas/          # Request/response models
+├── graph/                 # LangGraph
+│   ├── state.py          # Graph state
+│   ├── nodes.py          # Nodes (route, agent)
+│   └── graph.py          # Graph build and compile
+├── routers/               # API routes
+│   ├── health.py         # GET /health
+│   └── assistant/        # /api/chat, /api/chat/stream
+├── tools/                 # Tools (e.g. get_current_time)
+├── prompts/               # Prompts
+├── docs/
+│   └── api.md            # API reference
+├── scripts/               # Examples and tests
+│   ├── examples/         # e.g. chat_qwen_think.py
+│   └── test/             # API tests
+├── static/                # Test frontend
+│   └── index.html        # Multi-turn chat page
+└── utils/
+```
 
-#### 特技
+---
 
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+## Quick start
+
+### Requirements
+
+- Python 3.10+
+- Optional: Alibaba DashScope API key (for qwen and similar models).
+
+### Install and run
+
+```bash
+# Clone and enter project
+cd kamiu_agent
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Config: set in config/llm.env (example)
+# DASHSCOPE_API_KEY=sk-xxx
+# LLM_MODEL=qwen-plus
+# ENABLE_THINKING_DEFAULT=false
+
+# Start server (default http://0.0.0.0:8002)
+./run.sh
+# or
+uvicorn app:app --host 0.0.0.0 --port 8002 --reload
+```
+
+### Verify
+
+| Purpose | How |
+|--------|-----|
+| Health check | `GET http://localhost:8002/health` |
+| Multi-turn chat UI | Open `http://localhost:8002/` or `http://localhost:8002/static/index.html` in a browser |
+| Non-streaming chat | `POST http://localhost:8002/api/chat` with body `{"message": "Hello", "history": []}` |
+| Streaming chat | `POST http://localhost:8002/api/chat/stream` with same body; SSE events: `reasoning` \| `content` \| `usage` \| `done` |
+
+Request/response details: [docs/api.md](docs/api.md).
+
+---
+
+## Configuration
+
+Settings are loaded from `config/*.env` by `core/config.py` (`Settings`):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DASHSCOPE_API_KEY` | Alibaba DashScope API key | Required for qwen |
+| `LLM_MODEL` | Model name | `qwen-plus` |
+| `ENABLE_THINKING_DEFAULT` | Default thinking mode | `false` |
+
+---
+
+## Contributing
+
+1. Fork the repository.  
+2. Create a feature branch (e.g. `feat/xxx`).  
+3. Commit and push to the branch.  
+4. Open a Pull Request.
+
+---
+
+## License
+
+See the license file in the project root.
