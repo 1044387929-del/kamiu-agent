@@ -29,6 +29,8 @@ class AgentState(TypedDict, total=False):
     enable_db_query: bool
     # 是否强制执行数据库查询（由 route 判定：当问题属于“平台内部可验证数据”时为 True，避免模型仅口头回答）
     force_db_query: bool
+    # schema linking 结果：与当前问题最相关的表/字段摘要（由 schema_link 节点注入）
+    schema_link: str | None
     # 本次请求使用的模型 ID（由调用方注入；None 时用配置默认）
     model: str | None
     # 最近一次助手回复的思考过程（仅 enable_thinking 时由 agent 节点写入）

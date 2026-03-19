@@ -10,6 +10,7 @@ from core.config import settings
 from graph.state import AgentState
 from prompts import ASSISTANT_SYSTEM_WITH_TOOLS_TEMPLATE
 from tools import get_tools_list
+from graph.intent_router import llm_route
 
 def _messages_to_openai(messages: list[BaseMessage]) -> list[dict]:
     """LangChain messages 转 OpenAI API 格式。"""
@@ -106,8 +107,18 @@ def route_node(state: AgentState) -> AgentState:
     time_words = any(k in last_user for k in ("昨天", "今天", "近", "最近", "本周", "上周", "本月", "上月"))
     existence_question = any(k in last_user for k in ("有没有", "是否有", "有吗", "多少", "几条", "新增了", "出现吗"))
 
-    enable_db_query = bool(strong_sql or strong_db_words or biz_query_words or (entity_words and (time_words or existence_question)))
-    force_db_query = bool(entity_words and (time_words or existence_question) and not strong_db_words)
+    enable_db_query_rule = bool(
+        strong_sql
+        or strong_db_words
+        or biz_query_words
+        or (entity_words and (time_words or existence_question))
+    )
+    force_db_query_rule = bool(entity_words and (time_words or existence_question) and not strong_db_words)
+
+    # LLM 路由：当规则不够确定时，用结构化 JSON 做补充判定（模仿 DB-GPT IntentRecognition）
+    llm_decision = llm_route(state)
+    enable_db_query = bool(enable_db_query_rule or llm_decision.get("enable_db_query", False))
+    force_db_query = bool(force_db_query_rule or llm_decision.get("force_db_query", False))
     return {"enable_db_query": enable_db_query, "force_db_query": force_db_query}
 
 
@@ -128,6 +139,7 @@ def _agent_node_impl():
         enable_web_search = state.get("enable_web_search", False)
         enable_db_query = state.get("enable_db_query", False)
         force_db_query = state.get("force_db_query", False)
+        schema_link = (state.get("schema_link") or "").strip()
         model_override = (state.get("model") or "").strip() or None
         stream_queue = state.get("stream_queue")
         llm = get_llm(model=model_override)
@@ -146,17 +158,18 @@ def _agent_node_impl():
         )
         db_query_instruction = (
             (
-                "当用户提出与业务数据、统计、查询相关时，使用数据库只读工具：先调用 get_db_schema 了解表结构，再优先用 execute_readonly_orm_code 生成 Django ORM 代码（结果赋给 result），复杂统计可用 execute_readonly_sql 执行只读 SQL。禁止任何写操作。"
+                "当用户提出与业务数据、统计、查询相关时，使用数据库只读工具：先调用 get_db_schema 了解表结构，再生成只读 SQL 并用 execute_readonly_sql 执行。禁止任何写操作。"
                 if not force_db_query
                 else
-                "当问题属于平台内部可验证的数据（如讨论/帖子/评论在某天是否新增、数量是多少）时，你必须使用数据库只读工具来验证，禁止仅凭推断回答。流程：先调用 get_db_schema → 生成并展示只读查询（优先 Django ORM 代码，用 execute_readonly_orm_code；必要时用 execute_readonly_sql）→ 执行并根据结果作答。若工具不可用或执行失败，说明原因并给出下一步排查信息。禁止任何写操作。"
+                "当问题属于平台内部可验证的数据（如讨论/帖子/评论在某天是否新增、数量是多少）时，你必须使用数据库只读工具来验证，禁止仅凭推断回答。流程：先调用 get_db_schema → 生成并展示只读 SQL（execute_readonly_sql）→ 执行并根据结果作答。若工具不可用或执行失败，说明原因并给出下一步排查信息。禁止任何写操作。"
             )
             if enable_db_query
             else ""
         )
+        schema_hint = f"\n\n【相关表结构（已自动筛选）】\n{schema_link}\n" if (enable_db_query and schema_link) else ""
         system_text = ASSISTANT_SYSTEM_WITH_TOOLS_TEMPLATE.format(
             web_search_instruction=web_search_instruction,
-            db_query_instruction=db_query_instruction,
+            db_query_instruction=db_query_instruction + schema_hint,
         )
         full = [SystemMessage(content=system_text)] + list(messages)
 

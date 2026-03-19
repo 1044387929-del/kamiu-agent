@@ -1,88 +1,25 @@
 """
-数据库只读工具：Django ORM 内省、ORM 代码执行（只读）、只读 SQL 执行。
-供业务查数场景使用；禁止任何写操作。
+数据库只读工具：schema 获取、只读 SQL 执行、SQL 修复（只读）。
+
+对齐 DB-GPT 理念：以 SQL 为中心，不执行 ORM 代码；强安全约束禁止任何写操作/多语句/危险函数。
 """
 from __future__ import annotations
 
-import ast
 import json
-import sys
 from typing import Any
 
 from langchain_core.tools import tool
 
 from core.config import settings
-
-
-def _ensure_django() -> bool:
-    """若配置了 Django，将项目路径加入 sys.path 并执行 django.setup()。返回是否成功。"""
-    if not (settings.django_settings_module and settings.django_project_path):
-        return False
-    path = settings.django_project_path.strip()
-    if path not in sys.path:
-        sys.path.insert(0, path)
-    import os
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", settings.django_settings_module)
-    try:
-        import django
-        django.setup()
-        return True
-    except Exception:
-        return False
-
-
-# 禁止在 ORM 代码中出现的写操作关键字（小写检测）
-_ORM_FORBIDDEN = (
-    ".delete(", ".update(", ".create(", ".save(", ".bulk_create(",
-    ".get_or_create(", ".update_or_create(", ".bulk_update(",
-    ".__setattr__", ".__delattr__", "del ", "exec(", "eval(",
-    "compile(", "open(", "input(", "subprocess.", "os.system",
-)
-
-
-def _check_orm_readonly(code: str) -> str | None:
-    """检查代码是否包含写操作，若有则返回错误说明，否则返回 None。"""
-    code_lower = code.lower()
-    for token in _ORM_FORBIDDEN:
-        if token in code_lower:
-            return f"禁止在查询代码中使用写操作或危险调用（检测到: {token.strip('.')}）。仅允许只读查询。"
-    try:
-        tree = ast.parse(code)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Attribute):
-                    name = node.func.attr.lower()
-                    if name in ("delete", "update", "create", "save", "bulk_create", "get_or_create", "update_or_create", "bulk_update"):
-                        return f"禁止调用 .{node.func.attr}()，仅允许只读查询。"
-    except SyntaxError:
-        pass
-    return None
+from core.llm import get_openai_client
 
 
 @tool
 def get_db_schema(table_prefix: str = "") -> str:
-    """获取数据库表结构说明，供生成 Django ORM 查询或 SQL 时参考。建议在生成查询代码前先调用本工具。table_prefix 可选，用于过滤表名（留空则返回所有表）。"""
-    if _ensure_django():
-        try:
-            from django.apps import apps
-            from django.db import connection
+    """获取数据库表结构说明，供生成 SQL 时参考。建议在生成 SQL 前先调用本工具。
 
-            parts = []
-            for model in apps.get_models():
-                table = model._meta.db_table
-                if table_prefix and not table.startswith(table_prefix):
-                    continue
-                fields = []
-                for f in model._meta.get_fields():
-                    if hasattr(f, "column"):
-                        fields.append(f"{f.name} ({f.__class__.__name__})")
-                    elif hasattr(f, "related_model") and f.related_model:
-                        fields.append(f"{f.name} -> {f.related_model._meta.label}")
-                parts.append(f"Model: {model._meta.label}\n  Table: {table}\n  Fields: {', '.join(fields)}")
-            return "\n\n".join(parts) if parts else "未找到匹配的模型。"
-        except Exception as e:
-            return f"Django 内省失败: {e}"
-    # 回退：用 INFORMATION_SCHEMA
+    table_prefix 可选，用于过滤表名（留空则返回所有表）。
+    """
     try:
         import pymysql
         conn = pymysql.connect(
@@ -118,91 +55,105 @@ def get_db_schema(table_prefix: str = "") -> str:
         return f"从数据库读取表结构失败: {e}"
 
 
-@tool
-def execute_readonly_orm_code(code: str) -> str:
-    """执行只读的 Django ORM 代码。代码必须将查询结果赋给变量 result，例如 result = list(Model.objects.filter(...).values())。
-    仅允许只读操作（filter、values、annotate 等），禁止 delete、update、create、save。若需复杂统计可改用 execute_readonly_sql。"""
-    err = _check_orm_readonly(code)
-    if err:
-        return err
-    if not _ensure_django():
-        return "未配置 Django（DJANGO_SETTINGS_MODULE、DJANGO_PROJECT_PATH），无法执行 ORM 代码。"
-    try:
-        from django.apps import apps
-        from django.db.models import Q, F, Count, Sum, Avg, Min, Max, Value
-        from django.db.models.functions import Coalesce
-
-        restricted = {
-            "result": None,
-            "Q": Q,
-            "F": F,
-            "Count": Count,
-            "Sum": Sum,
-            "Avg": Avg,
-            "Min": Min,
-            "Max": Max,
-            "Value": Value,
-            "Coalesce": Coalesce,
-            "list": list,
-            "dict": dict,
-        }
-        for model in apps.get_models():
-            restricted[model.__name__] = model
-        exec(compile(code, "<orm>", "exec"), restricted)
-        out = restricted.get("result")
-        if out is None:
-            return "代码未将结果赋给变量 result。请确保最后有 result = list(...) 或 result = ..."
-        if hasattr(out, "__iter__") and not isinstance(out, (str, bytes)):
-            rows = list(out)
-            if not rows:
-                return "查询结果为空。"
-            if hasattr(rows[0], "_asdict"):
-                rows = [r._asdict() for r in rows]
-            elif hasattr(rows[0], "__dict__"):
-                rows = [{k: _serialize(v) for k, v in r.__dict__.items() if not k.startswith("_")} for r in rows]
-            elif isinstance(rows[0], dict):
-                rows = [{k: _serialize(v) for k, v in r.items()} for r in rows]
-            else:
-                rows = [str(r) for r in rows]
-            return json.dumps(rows, ensure_ascii=False, default=str)
-        return str(out)
-    except Exception as e:
-        return f"执行 ORM 代码出错: {type(e).__name__}: {e}"
-
-
-def _serialize(v: Any) -> Any:
-    from datetime import date, datetime
-    from decimal import Decimal
-    from uuid import UUID
-    if v is None:
-        return None
-    if isinstance(v, (date, datetime)):
-        return v.isoformat()
-    if isinstance(v, (Decimal, UUID)):
-        return str(v)
-    if hasattr(v, "pk"):
-        return v.pk
-    return v
-
-
 # 只允许的 SQL 语句类型（白名单）
 _SQL_READONLY_PREFIXES = ("select", "show", "describe", "desc", "explain")
+_SQL_FORBIDDEN_KEYWORDS = (
+    "insert",
+    "update",
+    "delete",
+    "replace",
+    "alter",
+    "drop",
+    "truncate",
+    "create",
+    "rename",
+    "grant",
+    "revoke",
+    "commit",
+    "rollback",
+    "set",
+    "use",
+    "load",
+    "outfile",
+    "infile",
+    "call",
+    "execute",
+    "prepare",
+    "deallocate",
+)
+_SQL_FORBIDDEN_FUNCS = (
+    "sleep",
+    "benchmark",
+    "load_file",
+)
 
 
-def _sql_is_readonly(sql: str) -> bool:
-    """简单检查：去除注释和空白后，是否以只读关键字开头。"""
+def _strip_sql_comments_and_strings(sql: str) -> str:
+    """去除注释与字符串内容，用于安全检查（粗粒度，不追求完美 SQL 解析）。"""
     import re
-    s = re.sub(r"--.*$", "", sql, flags=re.MULTILINE)
-    s = re.sub(r"/\*.*?\*/", "", s, flags=re.DOTALL)
-    s = s.strip().lower()
-    return any(s.startswith(p) for p in _SQL_READONLY_PREFIXES)
+
+    s = sql or ""
+    # 去除 -- 注释与 /* */ 注释
+    s = re.sub(r"--.*$", " ", s, flags=re.MULTILINE)
+    s = re.sub(r"/\*.*?\*/", " ", s, flags=re.DOTALL)
+    # 去除单引号/双引号字符串
+    s = re.sub(r"'([^'\\\\]|\\\\.)*'", "''", s)
+    s = re.sub(r"\"([^\"\\\\]|\\\\.)*\"", "\"\"", s)
+    return s
+
+
+def _normalize_sql(sql: str) -> str:
+    s = _strip_sql_comments_and_strings(sql)
+    return " ".join((s or "").strip().lower().split())
+
+
+def _ensure_single_statement(sql: str) -> bool:
+    # 允许末尾一个分号，但不允许多语句
+    s = (sql or "").strip()
+    if not s:
+        return False
+    if s.count(";") == 0:
+        return True
+    # 只允许最后一个分号
+    return s.rstrip().endswith(";") and s.rstrip()[:-1].find(";") == -1
+
+
+def _sql_is_readonly(sql: str) -> tuple[bool, str]:
+    """安全校验：只读前缀 + 禁止关键字/危险函数 + 禁止多语句。"""
+    if not _ensure_single_statement(sql):
+        return False, "禁止多语句 SQL（仅允许一条只读语句）。"
+    s = _normalize_sql(sql)
+    if not any(s.startswith(p) for p in _SQL_READONLY_PREFIXES):
+        return False, "仅允许只读 SQL（SELECT/SHOW/DESCRIBE/EXPLAIN）。"
+    # 禁止关键字（出现在任意位置都拒绝）
+    for kw in _SQL_FORBIDDEN_KEYWORDS:
+        if re.search(rf"\b{re.escape(kw)}\b", s):
+            return False, f"检测到危险关键字 `{kw}`，已拒绝。"
+    for fn in _SQL_FORBIDDEN_FUNCS:
+        if re.search(rf"\b{re.escape(fn)}\s*\(", s):
+            return False, f"检测到危险函数 `{fn}()`，已拒绝。"
+    return True, ""
+
+
+def _maybe_add_limit(sql: str, limit: int = 200) -> str:
+    """对 SELECT 查询默认加 LIMIT，避免大结果集拖库；若已含 LIMIT/为聚合 count 则不加。"""
+    s = _normalize_sql(sql)
+    if not s.startswith("select"):
+        return sql
+    if re.search(r"\blimit\b", s):
+        return sql
+    if re.search(r"\bcount\s*\(", s):
+        return sql
+    return (sql.rstrip().rstrip(";") + f" LIMIT {limit};")
 
 
 @tool
 def execute_readonly_sql(sql: str) -> str:
     """执行只读 SQL（仅允许 SELECT、SHOW、DESCRIBE、EXPLAIN）。禁止 DELETE、UPDATE、INSERT、ALTER 等任何写操作。适用于 ORM 难以表达的复杂查询。"""
-    if not _sql_is_readonly(sql):
-        return "仅允许只读 SQL（SELECT/SHOW/DESCRIBE/EXPLAIN），当前语句被拒绝。"
+    ok, reason = _sql_is_readonly(sql)
+    if not ok:
+        return reason
+    sql = _maybe_add_limit(sql, limit=200)
     try:
         import pymysql
         conn = pymysql.connect(
@@ -227,3 +178,37 @@ def execute_readonly_sql(sql: str) -> str:
         return "未安装 pymysql，无法执行 SQL。请安装: pip install pymysql"
     except Exception as e:
         return f"执行 SQL 出错: {type(e).__name__}: {e}"
+
+
+@tool
+def repair_sql(question: str, sql: str, error: str, schema_hint: str = "") -> str:
+    """修复只读 SQL：根据问题、schema_hint 与数据库错误信息，生成修复后的只读 SQL。只允许 SELECT/SHOW/DESCRIBE/EXPLAIN。"""
+    client = get_openai_client()
+    system = (
+        "你是一个 SQL 修复助手。目标：修复用户问题对应的只读 SQL，使其能在给定 schema 下执行成功。\n"
+        "严格约束：只输出一条 SQL，且必须是只读（SELECT/SHOW/DESCRIBE/EXPLAIN），禁止任何写操作、禁止多语句、禁止 INTO OUTFILE/LOAD DATA 等危险操作。\n"
+        "如果需要引用表/字段，必须来自 schema_hint。"
+    )
+    payload = {
+        "question": question,
+        "sql": sql,
+        "error": error,
+        "schema_hint": schema_hint,
+    }
+    try:
+        completion = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            temperature=0.0,
+        )
+        fixed = (completion.choices[0].message.content or "").strip()
+        # 二次校验，确保修复结果仍只读
+        ok, reason = _sql_is_readonly(fixed)
+        if not ok:
+            return f"修复 SQL 未通过安全校验：{reason}"
+        return _maybe_add_limit(fixed, limit=200)
+    except Exception as e:
+        return f"SQL 修复失败: {type(e).__name__}: {e}"
