@@ -16,6 +16,7 @@ from core.config import settings
 from core.llm import get_openai_client
 from graph.state import AgentState
 from tools.db import get_db_schema
+from core.schema_vector_store import retrieve_schema_blocks, upsert_schema_blocks
 
 
 _SCHEMA_LINK_SYSTEM = (
@@ -83,9 +84,47 @@ def schema_link_node(state: AgentState) -> AgentState:
         return {"schema_link": None}
 
     # get_db_schema 是 StructuredTool，需用 invoke 调用
-    full_schema = get_db_schema.invoke({"table_prefix": ""})  # 全量 schema（Django 内省优先）
+    full_schema = get_db_schema.invoke({"table_prefix": ""})
     blocks = _split_schema_blocks(full_schema)
-    candidates = _rank_blocks(question, blocks, top_k=12)
+
+    # 先尝试用“DB Summary 向量检索”召回候选（对齐 DB-GPT），失败则仅用 lexical top-k
+    try:
+        upsert_schema_blocks(full_schema_text=full_schema, blocks=blocks)
+        vec_candidates = retrieve_schema_blocks(question, top_k=12)
+    except Exception:
+        vec_candidates = []
+
+    lex_candidates = _rank_blocks(question, blocks, top_k=12)
+    # 合并去重：优先向量召回，再补 lexical
+    seen = set()
+    candidates: list[str] = []
+    for b in (vec_candidates + lex_candidates):
+        key = (b or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        candidates.append(key)
+        if len(candidates) >= 16:
+            break
+
+    # 业务扩展：问题涉及“学生/某人/姓名”时，强制加入含 学生/student/姓名/student_name 的表块，避免只看到 accounts 而漏掉 school_student
+    _person_keywords = ("学生", "姓名", "某人", "谁", "有没有", "是否存在", "叫什么")
+    _block_keywords = ("学生", "student", "姓名", "student_name", "first_name", "last_name")
+    if any(k in question for k in _person_keywords):
+        for blk in blocks:
+            blk_lower = (blk or "").lower()
+            blk_raw = blk or ""
+            if any(k in blk_raw or k.lower() in blk_lower for k in _block_keywords):
+                key = blk.strip()
+                if key and key not in seen:
+                    seen.add(key)
+                    candidates.append(key)
+                    if len(candidates) >= 20:
+                        break
+        # 保持顺序稳定：已有候选在前，新加的在后
+        if len(candidates) > 16:
+            candidates = candidates[:20]
+
     # 候选 schema 太长时截断（避免提示超长）
     schema_for_link = "\n\n".join(candidates)
     max_chars = 12000

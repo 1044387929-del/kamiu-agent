@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     dashscope_api_key: str = ""
     llm_model: str = "qwen-plus"
     enable_thinking_default: bool = False
+    embedding_model: str = Field(default="text-embedding-v3", alias="EMBEDDING_MODEL")
+    chroma_persist_dir: str = Field(default=str(BASE_DIR / "data" / "chroma"), alias="CHROMA_PERSIST_DIR")
 
     # 数据库（database.env 中 DB_* 变量）
     db_engine: str = Field(default="", alias="DB_ENGINE")

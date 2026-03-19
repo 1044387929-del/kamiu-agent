@@ -158,10 +158,12 @@ def _agent_node_impl():
         )
         db_query_instruction = (
             (
-                "当用户提出与业务数据、统计、查询相关时，使用数据库只读工具：先调用 get_db_schema 了解表结构，再生成只读 SQL 并用 execute_readonly_sql 执行。禁止任何写操作。"
+                "当用户提出与业务数据、统计、查询相关时，使用数据库只读工具：先根据下方【相关表结构】生成只读 SQL 并用 execute_readonly_sql 执行。禁止任何写操作。 "
+                "重要：若问题涉及“学生”“某人是否存在”“按姓名查”等，平台可能有多处存储：如 accounts 表（登录用户，user_type=student、first_name/last_name/username）与 school_student 表（学生档案，student_name）。必须在所有相关表都查询后再下结论，不可只查一张表就断言不存在。"
                 if not force_db_query
                 else
-                "当问题属于平台内部可验证的数据（如讨论/帖子/评论在某天是否新增、数量是多少）时，你必须使用数据库只读工具来验证，禁止仅凭推断回答。流程：先调用 get_db_schema → 生成并展示只读 SQL（execute_readonly_sql）→ 执行并根据结果作答。若工具不可用或执行失败，说明原因并给出下一步排查信息。禁止任何写操作。"
+                "当问题属于平台内部可验证的数据（如讨论/帖子/评论、或某人是否存在等）时，你必须使用数据库只读工具验证，禁止仅凭推断回答。"
+                "流程：根据下方【相关表结构】生成只读 SQL（execute_readonly_sql）→ 执行并根据结果作答。若涉及“学生”“某人”“姓名”，须同时考虑 accounts（user_type=student、first_name/last_name/username）与 school_student（student_name）等表，在所有可能来源都查完后再给结论。禁止任何写操作。"
             )
             if enable_db_query
             else ""

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from langchain_core.tools import tool
@@ -35,18 +36,38 @@ def get_db_schema(table_prefix: str = "") -> str:
             with conn.cursor() as cur:
                 like = f"%{table_prefix}%" if table_prefix else "%"
                 cur.execute(
-                    "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_KEY FROM INFORMATION_SCHEMA.COLUMNS "
-                    "WHERE TABLE_SCHEMA = %s AND TABLE_NAME LIKE %s ORDER BY TABLE_NAME, ORDINAL_POSITION",
+                    "SELECT c.TABLE_NAME, t.TABLE_COMMENT, c.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_KEY, c.COLUMN_COMMENT "
+                    "FROM INFORMATION_SCHEMA.COLUMNS c "
+                    "JOIN INFORMATION_SCHEMA.TABLES t "
+                    "  ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME "
+                    "WHERE c.TABLE_SCHEMA = %s AND c.TABLE_NAME LIKE %s "
+                    "ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION",
                     (settings.db_name, like),
                 )
                 rows = cur.fetchall()
             if not rows:
                 return "未找到匹配的表。"
             from collections import defaultdict
-            by_table = defaultdict(list)
+            by_table: dict[str, dict[str, Any]] = defaultdict(lambda: {"comment": "", "cols": []})
             for r in rows:
-                by_table[r["TABLE_NAME"]].append(f"{r['COLUMN_NAME']} ({r['DATA_TYPE']})")
-            return "\n".join(f"Table: {t}\n  Columns: {', '.join(cols)}" for t, cols in sorted(by_table.items()))
+                tname = r["TABLE_NAME"]
+                tcomment = (r.get("TABLE_COMMENT") or "").strip()
+                if tcomment and not by_table[tname]["comment"]:
+                    by_table[tname]["comment"] = tcomment
+                col = r["COLUMN_NAME"]
+                dtype = r["DATA_TYPE"]
+                ckey = (r.get("COLUMN_KEY") or "").strip()
+                ccomment = (r.get("COLUMN_COMMENT") or "").strip()
+                key_tag = " PK" if ckey.upper() == "PRI" else (f" {ckey}" if ckey else "")
+                suffix = f" # {ccomment}" if ccomment else ""
+                by_table[tname]["cols"].append(f"- {col} ({dtype}){key_tag}{suffix}")
+
+            out_blocks: list[str] = []
+            for t, info in sorted(by_table.items()):
+                header = f"Table: {t}" + (f"  # {info['comment']}" if info["comment"] else "")
+                cols = "\n".join(info["cols"])
+                out_blocks.append(f"{header}\nColumns:\n{cols}")
+            return "\n\n".join(out_blocks)
         finally:
             conn.close()
     except ImportError:
@@ -90,8 +111,6 @@ _SQL_FORBIDDEN_FUNCS = (
 
 def _strip_sql_comments_and_strings(sql: str) -> str:
     """去除注释与字符串内容，用于安全检查（粗粒度，不追求完美 SQL 解析）。"""
-    import re
-
     s = sql or ""
     # 去除 -- 注释与 /* */ 注释
     s = re.sub(r"--.*$", " ", s, flags=re.MULTILINE)

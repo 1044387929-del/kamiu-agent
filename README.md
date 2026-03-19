@@ -12,9 +12,12 @@
 
 ## Features
 
-- **LangGraph orchestration**: route → Agent (LLM + bound tools) → conditional edge (execute tools and loop back when `tool_calls` present).
+- **LangGraph orchestration**: route → schema linking (relevant schema selection) → Agent (LLM + dynamic tool binding) → conditional edge (execute tools and loop back when `tool_calls` present).
 - **Dual API modes**: non-streaming `POST /api/chat` and streaming SSE `POST /api/chat/stream`, same graph logic.
 - **Thinking mode**: optional `enable_thinking` for models that support reasoning chains (e.g. deepseek-v3.2).
+- **Text2SQL (read-only)**: automatically routes DB questions, performs schema linking first, then generates read-only SQL and executes safely.
+- **Auto repair & retry**: on SQL errors, repairs and retries up to 3 times; UI shows each attempt’s SQL and result.
+- **Frontend UX**: assistant output rendered as Markdown; executed SQL and query results are shown in dedicated blocks.
 - **Ready to run**: built-in test UI (multi-turn chat), health check, CORS; config loaded from `config/*.env`.
 
 ---
@@ -23,7 +26,7 @@
 
 ### Request to graph
 
-Requests carry `message`, optional `model`, `enable_web_search`, and `enable_thinking`. The server validates `model`, builds the graph with or without `web_search` based on `enable_web_search`, injects state, and runs the graph.
+Requests carry `message`, optional `model`, `enable_web_search`, and `enable_thinking`. The server validates `model`, injects state, and runs the graph. Whether to query DB is decided automatically by routing.
 
 ```mermaid
 flowchart LR
@@ -33,23 +36,24 @@ flowchart LR
     subgraph Server
         B[Validate model / default]
         C["get_graph(enable_web_search)"]
-        D["Tools: get_current_time (+ web_search?)"]
-        E[Inject state, run graph]
+        D[Inject state, run graph]
     end
     A --> B
     B --> C
     C --> D
-    D --> E
 ```
 
 ### Graph execution
 
-The conversation graph is defined in `graph/graph.py`: route → agent; if the LLM returns `tool_calls`, run tools and loop back to agent (possibly multiple times), otherwise end.
+The conversation graph is defined in `graph/graph.py`: route decides whether DB is needed; if yes, schema linking runs first; then agent runs. If the LLM returns `tool_calls`, run tools and loop back to agent (possibly multiple times), otherwise end.
 
 ```mermaid
 flowchart LR
-    START([START]) --> route[route]
-    route --> agent[agent]
+    START([START]) --> route[route\nrules + LLM(JSON) routing]
+    route --> need_db{enable_db_query?}
+    need_db -->|yes| schema_link[schema_link\n2-stage: top-k candidates + LLM refine]
+    need_db -->|no| agent[agent]
+    schema_link --> agent[agent]
     agent --> has_tool_calls{Last message\nhas tool_calls?}
     has_tool_calls -->|yes| tools[tools]
     has_tool_calls -->|no| END([END])
@@ -58,9 +62,10 @@ flowchart LR
 
 | Node | Description |
 |------|-------------|
-| **route** | Router (placeholder; passes through to agent). |
-| **agent** | Calls LLM with the request’s **model** (`bind_tools`); may return tool_calls or final reply; system prompt says to **prefer non-web tools**, use `web_search` only when needed; in thinking mode, may sample reasoning when there are no tool_calls. |
-| **tools** | Runs `ToolNode(tools_list)`: always `get_current_time`; if the request enables web search, also `web_search`; results are written to state and control returns to agent. |
+| **route** | Intent routing (rules + LLM JSON) producing `enable_db_query/force_db_query`. |
+| **schema_link** | Schema linking: selects relevant tables/fields (lexical top-k + LLM refine) into `schema_link`. |
+| **agent** | Calls LLM with the request’s **model**; dynamically binds tools; when `force_db_query=true`, must verify via DB tools (no guessing). |
+| **tools** | Executes tools: `get_current_time`, `get_db_schema`, `execute_readonly_sql`, `repair_sql`, `web_search`. SQL failures are auto-repaired and retried (up to 3). Streaming UI receives `exec`/`exec_result`. |
 
 ---
 
@@ -82,6 +87,8 @@ kamiu_agent/
 │   └── schemas/          # Request/response models
 ├── graph/                 # LangGraph
 │   ├── state.py          # Graph state
+│   ├── intent_router.py  # LLM intent routing (JSON)
+│   ├── schema_link.py    # Schema linking (2-stage)
 │   ├── nodes.py          # Nodes (route, agent)
 │   └── graph.py          # Graph build and compile
 ├── routers/               # API routes
@@ -135,7 +142,7 @@ uvicorn app:app --host 0.0.0.0 --port 8002 --reload
 | Health check | `GET http://localhost:8002/health` |
 | Multi-turn chat UI | Open `http://localhost:8002/` or `http://localhost:8002/static/index.html` in a browser |
 | Non-streaming chat | `POST http://localhost:8002/api/chat` with body `{"message": "Hello", "history": []}` |
-| Streaming chat | `POST http://localhost:8002/api/chat/stream` with same body; SSE events: `reasoning` \| `content` \| `usage` \| `done` |
+| Streaming chat | `POST http://localhost:8002/api/chat/stream` with same body; SSE events: `reasoning` \| `content` \| `exec` \| `exec_result` \| `done` |
 
 Request/response details: [docs/api.md](docs/api.md).
 
@@ -150,6 +157,12 @@ Settings are loaded from `config/*.env` by `core/config.py` (`Settings`):
 | `DASHSCOPE_API_KEY` | Alibaba DashScope API key | Required for qwen |
 | `LLM_MODEL` | Model name | `qwen-plus` |
 | `ENABLE_THINKING_DEFAULT` | Default thinking mode | `false` |
+| `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME` | MySQL connection (read-only SQL) | see `config/database.env` |
+
+### Database safety (important)
+
+- Code-level: `execute_readonly_sql` enforces read-only SQL (only `SELECT/SHOW/DESCRIBE/EXPLAIN`), rejects multi-statements and dangerous keywords/functions, and adds a default `LIMIT` for `SELECT` to avoid heavy queries.
+- Recommended: use a **read-only DB account** (SELECT-only) as a second layer of defense.
 
 ---
 
