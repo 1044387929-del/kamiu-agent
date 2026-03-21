@@ -17,6 +17,8 @@ class AgentState(TypedDict, total=False):
     allowed_discussion_ids: list[str]
     # 当前选中的讨论 ID（若从讨论详情页打开助手）
     current_discussion_id: str | None
+    # 本轮用户问题（由 route 注入，用于提示内锚定“当前目标”，对齐 DB-GPT 的 user_goal / current_goal）
+    current_goal: str | None
     # 检索到的学科/知识库内容（RAG 结果）
     retrieved_docs: list[str]
     # 工具执行结果（如查数、画图）
@@ -29,6 +31,8 @@ class AgentState(TypedDict, total=False):
     enable_db_query: bool
     # 是否强制执行数据库查询（由 route 判定：当问题属于“平台内部可验证数据”时为 True，避免模型仅口头回答）
     force_db_query: bool
+    # 当前问题涉及的实体类型（由 route 根据 domain_config 推断），如 ["teacher", "discussion"]，用于 schema 扩展与提示
+    entity_types: list[str]
     # schema linking 结果：与当前问题最相关的表/字段摘要（由 schema_link 节点注入）
     schema_link: str | None
     # 本次请求使用的模型 ID（由调用方注入；None 时用配置默认）

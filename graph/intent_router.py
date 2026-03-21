@@ -19,8 +19,8 @@ from graph.state import AgentState
 _SYSTEM = (
     "你是意图路由器。根据用户问题，输出严格 JSON，用于决定是否需要调用外挂工具。\n"
     "规则：\n"
-    "- 仅当问题需要平台内部数据验证（新增/是否有/数量/统计/明细等）时，enable_db_query=true。\n"
-    "- 若属于平台内部可验证且用户明确询问“有没有/多少/是否新增/某天数据”，force_db_query=true（必须查库，不允许口头推断）。\n"
+    "- 仅当问题需要平台内部数据验证（新增/是否有/数量/统计/明细/列表/主题等）时，enable_db_query=true。\n"
+    "- 若用户询问平台内可验证的具体数据，force_db_query=true：包括（1）有没有/多少/几场/次数等存在性或数量；（2）具体列表/主题/标题/都是什么/列出/有哪些等需从库中取出的内容。以上均必须查库后作答，不得推断或编造。\n"
     "- enable_web_search 不由你决定（由前端开关决定），你只输出 web_search_recommended（true/false）。\n"
     "输出 JSON schema：\n"
     "{\n"

@@ -13,7 +13,9 @@ import re
 from langchain_core.messages import HumanMessage
 
 from core.config import settings
+from core.domain_config import expand_blocks_by_entity_types
 from core.llm import get_openai_client
+from core.query_rewrite import rewrite_question_if_enabled
 from graph.state import AgentState
 from tools.db import get_db_schema
 from core.schema_vector_store import retrieve_schema_blocks, upsert_schema_blocks
@@ -79,22 +81,29 @@ def schema_link_node(state: AgentState) -> AgentState:
     if not state.get("enable_db_query", False):
         return {"schema_link": None}
 
-    question = _get_last_user_text(state)
-    if not question:
+    raw_question = _get_last_user_text(state)
+    if not raw_question:
         return {"schema_link": None}
+    # 轻量级 Query Rewrite（可配置）：在不改变语义的前提下，仅优化表述，便于 schema 检索与 SQL 生成
+    question = rewrite_question_if_enabled(raw_question)
 
     # get_db_schema 是 StructuredTool，需用 invoke 调用
     full_schema = get_db_schema.invoke({"table_prefix": ""})
     blocks = _split_schema_blocks(full_schema)
 
+    top_k = settings.schema_retrieve_top_k
+    max_blocks = settings.schema_max_blocks
+    max_chars = settings.schema_max_chars
+    fallback_min = settings.schema_fallback_min_blocks
+
     # 先尝试用“DB Summary 向量检索”召回候选（对齐 DB-GPT），失败则仅用 lexical top-k
     try:
         upsert_schema_blocks(full_schema_text=full_schema, blocks=blocks)
-        vec_candidates = retrieve_schema_blocks(question, top_k=12)
+        vec_candidates = retrieve_schema_blocks(question, top_k=top_k)
     except Exception:
         vec_candidates = []
 
-    lex_candidates = _rank_blocks(question, blocks, top_k=12)
+    lex_candidates = _rank_blocks(question, blocks, top_k=top_k)
     # 合并去重：优先向量召回，再补 lexical
     seen = set()
     candidates: list[str] = []
@@ -104,30 +113,26 @@ def schema_link_node(state: AgentState) -> AgentState:
             continue
         seen.add(key)
         candidates.append(key)
-        if len(candidates) >= 16:
+        if len(candidates) >= max_blocks:
             break
 
-    # 业务扩展：问题涉及“学生/某人/姓名”时，强制加入含 学生/student/姓名/student_name 的表块，避免只看到 accounts 而漏掉 school_student
-    _person_keywords = ("学生", "姓名", "某人", "谁", "有没有", "是否存在", "叫什么")
-    _block_keywords = ("学生", "student", "姓名", "student_name", "first_name", "last_name")
-    if any(k in question for k in _person_keywords):
-        for blk in blocks:
-            blk_lower = (blk or "").lower()
-            blk_raw = blk or ""
-            if any(k in blk_raw or k.lower() in blk_lower for k in _block_keywords):
-                key = blk.strip()
-                if key and key not in seen:
-                    seen.add(key)
-                    candidates.append(key)
-                    if len(candidates) >= 20:
-                        break
-        # 保持顺序稳定：已有候选在前，新加的在后
-        if len(candidates) > 16:
-            candidates = candidates[:20]
+    # 业务扩展：按领域配置（entity_types）加入相关表块，避免漏表（学生/教师/讨论等由 domain_config 统一描述）
+    expand_blocks_by_entity_types(
+        blocks,
+        state.get("entity_types") or [],
+        seen,
+        candidates,
+        max_blocks,
+    )
+    if len(candidates) > max_blocks:
+        candidates = candidates[:max_blocks]
+
+    # 对齐 DB-GPT：检索结果为空或过少时，回退为全量 schema（避免“看不到表”导致只查一张表就下结论）
+    if len(candidates) < fallback_min and blocks:
+        candidates = blocks[:max_blocks]
 
     # 候选 schema 太长时截断（避免提示超长）
     schema_for_link = "\n\n".join(candidates)
-    max_chars = 12000
     if len(schema_for_link) > max_chars:
         schema_for_link = schema_for_link[:max_chars]
 

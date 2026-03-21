@@ -11,6 +11,7 @@ from graph.state import AgentState
 from prompts import ASSISTANT_SYSTEM_WITH_TOOLS_TEMPLATE
 from tools import get_tools_list
 from graph.intent_router import llm_route
+from core.domain_config import infer_entity_types_from_question, get_db_instruction_hints
 
 def _messages_to_openai(messages: list[BaseMessage]) -> list[dict]:
     """LangChain messages 转 OpenAI API 格式。"""
@@ -37,8 +38,9 @@ def route_node(state: AgentState) -> AgentState:
             last_user = (m.content or "").strip()
             break
     if not last_user:
-        return {"enable_db_query": False, "force_db_query": False}
+        return {"enable_db_query": False, "force_db_query": False, "entity_types": [], "current_goal": None}
 
+    entity_types = infer_entity_types_from_question(last_user)
     text = last_user.lower()
 
     # 强信号：出现 SQL 关键字/表字段/数据库指令
@@ -105,21 +107,60 @@ def route_node(state: AgentState) -> AgentState:
         )
     )
     time_words = any(k in last_user for k in ("昨天", "今天", "近", "最近", "本周", "上周", "本月", "上月"))
-    existence_question = any(k in last_user for k in ("有没有", "是否有", "有吗", "多少", "几条", "新增了", "出现吗"))
+    existence_question = any(
+        k in last_user
+        for k in (
+            "有没有",
+            "是否有",
+            "有吗",
+            "多少",
+            "几条",
+            "新增了",
+            "出现吗",
+            "几场",
+            "场次",
+            "次数",
+            "多少场",
+            "几次",
+        )
+    )
+    # 问“具体内容/列表”（主题、都是什么、列出等）：也必须查库后作答，禁止根据 schema 或常识编造
+    content_list_question = any(
+        k in last_user
+        for k in (
+            "主题",
+            "都是什么",
+            "什么内容",
+            "列出",
+            "有哪些",
+            "名单",
+            "标题",
+            "名称",
+            "具体",
+        )
+    )
 
     enable_db_query_rule = bool(
         strong_sql
         or strong_db_words
         or biz_query_words
-        or (entity_words and (time_words or existence_question))
+        or (entity_words and (time_words or existence_question or content_list_question))
     )
-    force_db_query_rule = bool(entity_words and (time_words or existence_question) and not strong_db_words)
+    # 对“平台内部可验证数据”的问题更强硬：问数量/是否存在/具体列表内容时，强制查库，不允许纯推断或编造
+    force_db_query_rule = bool(
+        entity_words and (existence_question or content_list_question) and not strong_db_words
+    )
 
     # LLM 路由：当规则不够确定时，用结构化 JSON 做补充判定（模仿 DB-GPT IntentRecognition）
     llm_decision = llm_route(state)
     enable_db_query = bool(enable_db_query_rule or llm_decision.get("enable_db_query", False))
     force_db_query = bool(force_db_query_rule or llm_decision.get("force_db_query", False))
-    return {"enable_db_query": enable_db_query, "force_db_query": force_db_query}
+    return {
+        "enable_db_query": enable_db_query,
+        "force_db_query": force_db_query,
+        "entity_types": entity_types,
+        "current_goal": last_user[:500] if last_user else None,
+    }
 
 
 def _agent_node_impl():
@@ -139,6 +180,7 @@ def _agent_node_impl():
         enable_web_search = state.get("enable_web_search", False)
         enable_db_query = state.get("enable_db_query", False)
         force_db_query = state.get("force_db_query", False)
+        entity_types = state.get("entity_types") or []
         schema_link = (state.get("schema_link") or "").strip()
         model_override = (state.get("model") or "").strip() or None
         stream_queue = state.get("stream_queue")
@@ -156,23 +198,45 @@ def _agent_node_impl():
             if enable_web_search
             else ""
         )
+        # 通用 DB 指令：硬性要求 + 禁止编造 + 多步查库（对齐 DB-GPT ReAct：分步执行、根据上一步结果再查）
+        _db_base = (
+            "当用户提出与业务数据、统计、查询相关时，使用数据库只读工具：根据下方【相关表结构】生成只读 SQL 并用 execute_readonly_sql 执行。禁止任何写操作。"
+            "硬性要求：需要查库时你必须先调用至少一次 execute_readonly_sql 并等待返回结果，再根据返回结果组织回答。"
+            "禁止在未调用 execute_readonly_sql 或未收到工具返回前，根据表名、字段名或常识编造任何具体数据（包括但不限于：讨论主题、标题、人名、数量、列表项、统计结论）。"
+            "若尚未执行 SQL 或工具返回为空，只能回答「需要先查库才能回答」或「未查到相关记录」，不得编造、推测或列举示例数据。"
+            "多步查库：若问题依赖前文或需多步验证（例如先查某老师/某主题的讨论列表或 discussion_id，再查某人是否参与其中），必须分步执行多次 execute_readonly_sql，根据上一步的查询结果决定下一步的 SQL，直到有足够依据再给结论；不要在一次查询未覆盖全部条件时就下结论（例如用户问「我是否参加过前面提到的那几场讨论」时，须先查出那几场的 discussion_id，再查参与表是否包含当前用户，不能只按人名查参与表就回答）。"
+        )
+        _db_force = (
+            "本问题必须通过 execute_readonly_sql 获取真实数据后再回答；禁止直接给出任何具体列表、主题、数量或统计结果；须先执行 SQL 再作答。"
+        )
+        _hints = get_db_instruction_hints(entity_types)
         db_query_instruction = (
-            (
-                "当用户提出与业务数据、统计、查询相关时，使用数据库只读工具：先根据下方【相关表结构】生成只读 SQL 并用 execute_readonly_sql 执行。禁止任何写操作。 "
-                "重要：若问题涉及“学生”“某人是否存在”“按姓名查”等，平台可能有多处存储：如 accounts 表（登录用户，user_type=student、first_name/last_name/username）与 school_student 表（学生档案，student_name）。必须在所有相关表都查询后再下结论，不可只查一张表就断言不存在。"
-                if not force_db_query
-                else
-                "当问题属于平台内部可验证的数据（如讨论/帖子/评论、或某人是否存在等）时，你必须使用数据库只读工具验证，禁止仅凭推断回答。"
-                "流程：根据下方【相关表结构】生成只读 SQL（execute_readonly_sql）→ 执行并根据结果作答。若涉及“学生”“某人”“姓名”，须同时考虑 accounts（user_type=student、first_name/last_name/username）与 school_student（student_name）等表，在所有可能来源都查完后再给结论。禁止任何写操作。"
-            )
+            (_db_base + (" " + _db_force if force_db_query else "") + (" 重要：" + _hints if _hints else ""))
             if enable_db_query
             else ""
         )
-        schema_hint = f"\n\n【相关表结构（已自动筛选）】\n{schema_link}\n" if (enable_db_query and schema_link) else ""
+        _engine = (settings.db_engine or "mysql").strip().lower()
+        db_type = "MySQL" if _engine == "mysql" else (_engine or "MySQL")
+        schema_hint = (
+            f"\n\n数据库类型：{db_type}。\n【相关表结构（已自动筛选）】\n{schema_link}\n"
+            if (enable_db_query and schema_link)
+            else ""
+        )
         system_text = ASSISTANT_SYSTEM_WITH_TOOLS_TEMPLATE.format(
             web_search_instruction=web_search_instruction,
             db_query_instruction=db_query_instruction + schema_hint,
         )
+        # 轮式对话锚定（对齐 DB-GPT）：显式注入当前用户问题与可选“对话开场”，减少偏航
+        current_goal = (state.get("current_goal") or "").strip()
+        first_user = ""
+        for m in messages:
+            if isinstance(m, HumanMessage):
+                first_user = (getattr(m, "content", None) or "").strip()
+                break
+        if current_goal:
+            system_text += f"\n\n当前用户问题：{current_goal}"
+        if first_user and first_user != current_goal and len(messages) > 2:
+            system_text += f"\n对话开场（供参考）：{first_user[:300]}"
         full = [SystemMessage(content=system_text)] + list(messages)
 
         if stream_queue is not None:
