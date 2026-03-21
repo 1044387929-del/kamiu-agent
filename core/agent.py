@@ -76,12 +76,13 @@ def chat_with_agent(req: ChatRequest) -> ChatResponse:
     if not model:
         model = settings.llm_model
     graph = get_graph(enable_web_search=enable_web_search)
+    config = {"recursion_limit": 25}
     result = graph.invoke({
         "messages": messages,
         "enable_thinking": enable_thinking,
         "enable_web_search": enable_web_search,
         "model": model,
-    })
+    }, config=config)
     final_messages = result.get("messages") or []
     reply = ""
     for m in reversed(final_messages):
@@ -123,9 +124,11 @@ def chat_with_agent_stream(req: ChatRequest) -> Generator[str, None, None]:
     graph = get_graph(enable_web_search=enable_web_search)
     result_holder = []
 
+    config = {"recursion_limit": 25}
+
     def run_graph():
         try:
-            result = graph.invoke(initial_state)
+            result = graph.invoke(initial_state, config=config)
             result_holder.append(result)
             if result.get("last_reasoning"):
                 stream_queue.put(("reasoning", result["last_reasoning"]))

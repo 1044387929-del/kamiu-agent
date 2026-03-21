@@ -162,5 +162,5 @@ def get_graph(enable_web_search: bool = False):
     builder.add_conditional_edges("agent", _has_tool_calls, {"tools": "tools", "end": END})
     builder.add_edge("tools", "agent")
 
-    # 显式设置递归上限，保证 agent⇄tools 可多轮执行（多步查库），避免过早截断（参考 DB-GPT ReAct max_steps）
-    return builder.compile(recursion_limit=25)
+    # recursion_limit 在 invoke 时通过 config 传入，compile 不再支持该参数
+    return builder.compile()

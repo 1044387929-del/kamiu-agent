@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "../../django_hmxy"
+		},
+		{
+			"path": "../../pyannote_diarization"
+		},
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../DB-GPT"
+		},
+		{
+			"path": "../.."
+		}
+	],
+	"settings": {}
+}
