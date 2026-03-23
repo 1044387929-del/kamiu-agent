@@ -22,15 +22,23 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# 跨域请求
 app.add_middleware(
+    # 跨域请求中间件
     CORSMiddleware,
+    # 允许所有来源
     allow_origins=["*"],
+    # 允许凭证
     allow_credentials=True,
+    # 允许所有方法
     allow_methods=["*"],
+    # 允许所有头
     allow_headers=["*"],
 )
 
+# 健康检查
 app.include_router(health.router)
+# 对话
 app.include_router(assistant.router, prefix="/api")
 
 # 测试前端：多轮对话聊天页

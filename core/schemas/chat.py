@@ -30,6 +30,10 @@ class ChatRequest(BaseModel):
     # 模型名，不传则用配置默认
     model: str | None = Field(default=None, description="模型名，不传则用配置默认")
 
+    # 可选：客户端/上游服务传入的“会话摘要/关键事实”，用于跳过二次摘要提取（节省 token/时间）
+    memory_summary: str | None = Field(default=None, description="会话摘要（供系统提示注入），可选")
+    key_facts: list[str] | None = Field(default=None, description="关键事实列表（供系统提示注入），可选")
+
 
 class ChatResponse(BaseModel):
     """

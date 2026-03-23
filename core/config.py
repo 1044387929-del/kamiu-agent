@@ -31,6 +31,21 @@ class Settings(BaseSettings):
     # 轮式对话防偏航：保留开头 N 轮（锚定主题）+ 最近 M 轮（近期上下文），中间截断（对齐 DB-GPT BufferedConversationMapperOperator）
     chat_keep_start_rounds: int = Field(default=1, alias="CHAT_KEEP_START_ROUNDS")
     chat_keep_end_rounds: int = Field(default=10, alias="CHAT_KEEP_END_ROUNDS")
+
+    # 会话记忆增强：当历史被轮次截断时，对被丢弃的旧内容做“摘要/关键事实”提取，并注入系统提示
+    memory_summary_enabled: bool = Field(default=True, alias="MEMORY_SUMMARY_ENABLED")
+    # 被丢弃部分的最小字符数，低于该阈值不触发额外摘要（避免无意义的二次 LLM 调用）
+    memory_summary_min_dropped_chars: int = Field(default=800, alias="MEMORY_SUMMARY_MIN_DROPPED_CHARS")
+    # 被丢弃部分用于摘要提取的最大字符数（超过则截断输入，优先保留更靠近当前的旧内容尾部）
+    memory_summary_max_dropped_chars: int = Field(default=8000, alias="MEMORY_SUMMARY_MAX_DROPPED_CHARS")
+    # 摘要输出最大字符数（注入系统提示前再做二次截断，控制上下文膨胀）
+    memory_summary_max_chars: int = Field(default=1200, alias="MEMORY_SUMMARY_MAX_CHARS")
+    # 关键事实最大条数
+    memory_key_facts_max: int = Field(default=10, alias="MEMORY_KEY_FACTS_MAX")
+    # 摘要提取的最大输出 token
+    memory_summary_max_tokens: int = Field(default=500, alias="MEMORY_SUMMARY_MAX_TOKENS")
+    # 单独指定摘要提取使用的模型（可选；默认使用 llm_model）
+    memory_summary_model: str | None = Field(default=None, alias="MEMORY_SUMMARY_MODEL")
     embedding_model: str = Field(default="text-embedding-v3", alias="EMBEDDING_MODEL")
     chroma_persist_dir: str = Field(default=str(BASE_DIR / "data" / "chroma"), alias="CHROMA_PERSIST_DIR")
     # Schema linking 可调参数（对齐 DB-GPT 的 KNOWLEDGE_SEARCH_TOP_SIZE）

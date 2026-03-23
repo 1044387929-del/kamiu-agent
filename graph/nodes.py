@@ -237,6 +237,16 @@ def _agent_node_impl():
             system_text += f"\n\n当前用户问题：{current_goal}"
         if first_user and first_user != current_goal and len(messages) > 2:
             system_text += f"\n对话开场（供参考）：{first_user[:300]}"
+
+        # 会话记忆注入：当 history 被轮次截断时，state 中会带“摘要/关键事实”，避免模型遗忘中间约束
+        memory_summary = (state.get("memory_summary") or "").strip()
+        if memory_summary:
+            system_text += f"\n\n会话摘要（供参考）：\n{memory_summary}"
+        key_facts = state.get("key_facts") or []
+        if isinstance(key_facts, list) and key_facts:
+            key_lines = "\n".join(f"- {str(x).strip()}" for x in key_facts if str(x).strip())
+            if key_lines.strip():
+                system_text += f"\n\n关键事实（供参考）：\n{key_lines}"
         full = [SystemMessage(content=system_text)] + list(messages)
 
         if stream_queue is not None:
