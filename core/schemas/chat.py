@@ -25,8 +25,14 @@ class ChatRequest(BaseModel):
     teacher_id: str = Field(default="", description="教师 ID，预留")
     # 是否开启思考模式，不传则用配置默认，默认 None
     enable_thinking: bool | None = Field(default=None, description="是否开启思考模式，不传则用配置默认")
+    # 是否开启联网搜索；开启后 agent 优先用非联网工具，解决不了再调用 web_search
+    enable_web_search: bool = Field(default=False, description="是否开启联网搜索")
     # 模型名，不传则用配置默认
     model: str | None = Field(default=None, description="模型名，不传则用配置默认")
+
+    # 可选：客户端/上游服务传入的“会话摘要/关键事实”，用于跳过二次摘要提取（节省 token/时间）
+    memory_summary: str | None = Field(default=None, description="会话摘要（供系统提示注入），可选")
+    key_facts: list[str] | None = Field(default=None, description="关键事实列表（供系统提示注入），可选")
 
 
 class ChatResponse(BaseModel):

@@ -9,15 +9,17 @@ from openai import OpenAI
 
 from core.config import settings
 from core.schemas.chat import ChatRequest, ChatResponse
-from prompts import ASSISTANT_SYSTEM
+from prompts import ASSISTANT_SYSTEM_TEMPLATE
 
 
 def build_messages(
     history: list[dict[str, Any]],
     message: str,
-    system_prompt: str | None = ASSISTANT_SYSTEM,
+    system_prompt: str | None = None,
 ) -> list[dict[str, str]]:
     """将 history + 当前 message 转为 OpenAI 格式的 messages。"""
+    if system_prompt is None:
+        system_prompt = ASSISTANT_SYSTEM_TEMPLATE.format()
     messages: list[dict[str, str]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})

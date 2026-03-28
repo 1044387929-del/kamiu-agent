@@ -12,3 +12,9 @@ langchain-core>=0.1.0
 langchain-community>=0.0.20
 langchain-openai>=0.0.5
 openai>=1.0.0
+
+# 向量检索（对齐 DB-GPT 的 DBSummary 思路）
+chromadb>=0.5.0
+
+# 数据库只读（业务查数）
+pymysql>=1.0.0

@@ -1,97 +1,180 @@
-# kamiu_agent
+# Kamiu Agent
 
-教师智能助手：LangGraph + FastAPI，与 Django 解耦，支持对话、查数、学科知识（规划中）。
+> Teacher assistant: a conversation Agent built with **LangGraph** and **FastAPI**, decoupled from Django. Supports multi-turn chat, tool calls, and thinking mode (planned: data lookup, subject knowledge).
 
-## 图与边（LangGraph）
-
-当前对话 Agent 的图由 `graph/graph.py` 定义，节点与边如下（条件边：根据最后一条消息是否含 `tool_calls` 决定走向）。
-
-```mermaid
-flowchart TB
-    START([START]) --> route
-    route --> agent
-    agent --> has_tool_calls{最后一条消息\n有 tool_calls?}
-    has_tool_calls -->|是| tools
-    has_tool_calls -->|否| END([END])
-    tools --> agent
-```
-
-- **route**：路由节点（占位，直接进入 agent）。
-- **agent**：调用 LLM（`bind_tools`），可返回 `tool_calls` 或最终回复；若开启思考模式且本次无 tool_calls，会补采 reasoning。
-- **tools**：执行 `ToolNode(tools_list)`（当前含 `get_current_time`），结果写回 state，回到 agent。
-
-## 项目结构
-
-```
-kamiu_agent/
-├── app/
-│   ├── main.py       # FastAPI 入口
-│   └── config.py     # 配置（从 config/*.env 加载）
-├── graph/            # LangGraph 图
-│   ├── state.py      # 图状态
-│   ├── nodes.py      # 节点逻辑
-│   └── graph.py      # 图构建
-├── tools/            # 工具（如调 Django 执行代码、向量检索）
-├── api/
-│   └── routes.py    # 接口：/api/chat 等
-├── config/          # 环境配置（llm.env, database.env）
-├── requirements.txt
-└── run.sh            # 启动脚本
-```
-
-## 运行
-
-```bash
-# 安装依赖
-pip install -r requirements.txt
-
-# 启动（默认 8002 端口）
-bash run.sh
-# 或
-PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
-```
-
-- 健康检查：`GET http://localhost:8002/health`
-- 对话（非流式）：`POST http://localhost:8002/api/chat`，body: `{"message": "你好", "history": [], "enable_thinking": false}`，返回 `{"reply": "..."}` 或带 `"reasoning"`（思考模式时）
-- 对话（流式 SSE）：`POST http://localhost:8002/api/chat/stream`，同上 body，事件类型：`reasoning` | `content` | `usage` | `done`
-- 思考模式：body 中 `"enable_thinking": true`（需模型支持，如 deepseek-v3.2），参考 `examples/chat_qwen_think.py`
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-009688?style=flat-square&logo=fastapi&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-Agent-1C3C3C?style=flat-square&logo=langchain&logoColor=white)
+![Pydantic](https://img.shields.io/badge/Pydantic-Settings-E6526F?style=flat-square&logo=pydantic&logoColor=white)
+![Uvicorn](https://img.shields.io/badge/Uvicorn-ASGI-499848?style=flat-square&logo=uvicorn&logoColor=white)
 
 ---
 
-#### 介绍
-{**以下是 Gitee 平台说明，您可以替换此简介**
-Gitee 是 OSCHINA 推出的基于 Git 的代码托管平台（同时支持 SVN）。专为开发者提供稳定、高效、安全的云端软件开发协作平台
-无论是个人、团队、或是企业，都能够用 Gitee 实现代码托管、项目管理、协作开发。企业项目请看 [https://gitee.com/enterprises](https://gitee.com/enterprises)}
+## Features
 
-#### 软件架构
-软件架构说明
+- **LangGraph orchestration**: route → schema linking (relevant schema selection) → Agent (LLM + dynamic tool binding) → conditional edge (execute tools and loop back when `tool_calls` present).
+- **Dual API modes**: non-streaming `POST /api/chat` and streaming SSE `POST /api/chat/stream`, same graph logic.
+- **Thinking mode**: optional `enable_thinking` for models that support reasoning chains (e.g. deepseek-v3.2).
+- **Text2SQL (read-only)**: automatically routes DB questions, performs schema linking first, then generates read-only SQL and executes safely.
+- **Auto repair & retry**: on SQL errors, repairs and retries up to 3 times; UI shows each attempt’s SQL and result.
+- **Frontend UX**: assistant output rendered as Markdown; executed SQL and query results are shown in dedicated blocks.
+- **Ready to run**: built-in test UI (multi-turn chat), health check, CORS; config loaded from `config/*.env`.
 
+---
 
-#### 安装教程
+## Architecture
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+### Request to graph
 
-#### 使用说明
+Requests carry `message`, optional `model`, `enable_web_search`, and `enable_thinking`. The server validates `model`, injects state, and runs the graph. Whether to query DB is decided automatically by routing.
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+```mermaid
+flowchart LR
+    subgraph Request
+        A[message, model, enable_web_search, enable_thinking]
+    end
+    subgraph Server
+        B[Validate model / default]
+        C["get_graph(enable_web_search)"]
+        D[Inject state, run graph]
+    end
+    A --> B
+    B --> C
+    C --> D
+```
 
-#### 参与贡献
+### Graph execution
 
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
+The conversation graph is defined in `graph/graph.py`: route decides whether DB is needed; if yes, schema linking runs first; then agent runs. If the LLM returns `tool_calls`, run tools and loop back to agent (possibly multiple times), otherwise end.
 
+```mermaid
+flowchart LR
+    START([START]) --> route[route\nrules + LLM(JSON) routing]
+    route --> need_db{enable_db_query?}
+    need_db -->|yes| schema_link[schema_link\n2-stage: top-k candidates + LLM refine]
+    need_db -->|no| agent[agent]
+    schema_link --> agent[agent]
+    agent --> has_tool_calls{Last message\nhas tool_calls?}
+    has_tool_calls -->|yes| tools[tools]
+    has_tool_calls -->|no| END([END])
+    tools --> agent
+```
 
-#### 特技
+| Node | Description |
+|------|-------------|
+| **route** | Intent routing (rules + LLM JSON) producing `enable_db_query/force_db_query`. |
+| **schema_link** | Schema linking: selects relevant tables/fields (lexical top-k + LLM refine) into `schema_link`. |
+| **agent** | Calls LLM with the request’s **model**; dynamically binds tools; when `force_db_query=true`, must verify via DB tools (no guessing). |
+| **tools** | Executes tools: `get_current_time`, `get_db_schema`, `execute_readonly_sql`, `repair_sql`, `web_search`. SQL failures are auto-repaired and retried (up to 3). Streaming UI receives `exec`/`exec_result`. |
 
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+---
+
+## Project structure
+
+```
+kamiu_agent/
+├── app.py                 # FastAPI app entry
+├── run.sh                 # Run script (default port 8002)
+├── requirements.txt
+├── config/                # Env config
+│   ├── llm.env           # LLM (DASHSCOPE_API_KEY, LLM_MODEL, etc.)
+│   └── database.env      # Database (reserved)
+├── core/                  # Core logic
+│   ├── config.py         # Settings (pydantic-settings)
+│   ├── agent.py          # Agent invocation
+│   ├── deps.py           # Dependency injection
+│   ├── llm/              # LLM client and Chat
+│   └── schemas/          # Request/response models
+├── graph/                 # LangGraph
+│   ├── state.py          # Graph state
+│   ├── intent_router.py  # LLM intent routing (JSON)
+│   ├── schema_link.py    # Schema linking (2-stage)
+│   ├── nodes.py          # Nodes (route, agent)
+│   └── graph.py          # Graph build and compile
+├── routers/               # API routes
+│   ├── health.py         # GET /health
+│   └── assistant/        # /api/chat, /api/chat/stream
+├── tools/                 # Tools (e.g. get_current_time)
+├── prompts/               # Prompts
+├── docs/
+│   └── api.md            # API reference
+├── scripts/               # Examples and tests
+│   ├── examples/         # e.g. chat_qwen_think.py
+│   └── test/             # API tests
+├── static/                # Test frontend
+│   └── index.html        # Multi-turn chat page
+└── utils/
+```
+
+---
+
+## Quick start
+
+### Requirements
+
+- Python 3.10+
+- Optional: Alibaba DashScope API key (for qwen and similar models).
+
+### Install and run
+
+```bash
+# Clone and enter project
+cd kamiu_agent
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Config: set in config/llm.env (example)
+# DASHSCOPE_API_KEY=sk-xxx
+# LLM_MODEL=qwen-plus
+# ENABLE_THINKING_DEFAULT=false
+
+# Start server (default http://0.0.0.0:8002)
+./run.sh
+# or
+uvicorn app:app --host 0.0.0.0 --port 8002 --reload
+```
+
+### Verify
+
+| Purpose | How |
+|--------|-----|
+| Health check | `GET http://localhost:8002/health` |
+| Multi-turn chat UI | Open `http://localhost:8002/` or `http://localhost:8002/static/index.html` in a browser |
+| Non-streaming chat | `POST http://localhost:8002/api/chat` with body `{"message": "Hello", "history": []}` |
+| Streaming chat | `POST http://localhost:8002/api/chat/stream` with same body; SSE events: `reasoning` \| `content` \| `exec` \| `exec_result` \| `done` |
+
+Request/response details: [docs/api.md](docs/api.md).
+
+---
+
+## Configuration
+
+Settings are loaded from `config/*.env` by `core/config.py` (`Settings`):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DASHSCOPE_API_KEY` | Alibaba DashScope API key | Required for qwen |
+| `LLM_MODEL` | Model name | `qwen-plus` |
+| `ENABLE_THINKING_DEFAULT` | Default thinking mode | `false` |
+| `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME` | MySQL connection (read-only SQL) | see `config/database.env` |
+
+### Database safety (important)
+
+- Code-level: `execute_readonly_sql` enforces read-only SQL (only `SELECT/SHOW/DESCRIBE/EXPLAIN`), rejects multi-statements and dangerous keywords/functions, and adds a default `LIMIT` for `SELECT` to avoid heavy queries.
+- Recommended: use a **read-only DB account** (SELECT-only) as a second layer of defense.
+
+---
+
+## Contributing
+
+1. Fork the repository.  
+2. Create a feature branch (e.g. `feat/xxx`).  
+3. Commit and push to the branch.  
+4. Open a Pull Request.
+
+---
+
+## License
+
+See the license file in the project root.

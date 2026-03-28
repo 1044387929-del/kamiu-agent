@@ -91,3 +91,6 @@ __pycache__/
 *.pyzw
 *.pyzwz
 *.pyzz
+
+DB-GPT-main/
+*.bin
